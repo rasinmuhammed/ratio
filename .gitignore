@@ -1,0 +1,26 @@
+
+data/
+*.npy
+*.npz
+*.faiss
+*.index
+*.parquet
+*.jsonl
+
+# Python environment and cache
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.env
+.env.*
+*.key
+*.pem
+.DS_Store
+.vscode/
+.idea/
+scratch/
+*.ipynb_checkpoints/
