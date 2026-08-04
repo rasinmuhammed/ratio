@@ -32,10 +32,16 @@ class Document:
 
 def normalize_text(raw: str) -> str:
     """Strip representation artifacts from raw text."""
+    # Scraped page headers injected mid-sentence by the source. Never part
+    # of the judgment, and they split sentences when left in place. Removed
+    # first so the whitespace pass below cleans up the gaps they leave.
+    text = re.sub(r"<span[^>]*>.*?</span>", " ", raw, flags=re.DOTALL)
+    text = re.sub(r"<[^>]+>", " ", text)
+
     # collapse runs of spaces/tabs as they are page-centering artifacts,
     # not information. newlines are preserved because they carry the documents
     # paragraph structure, which chunking will need.
-    text = re.sub(r"[ \t]+", " ", raw)
+    text = re.sub(r"[ \t]+", " ", text)
 
     # strip trailing spaces left at line ends by the collapse above
     text = re.sub(r" *\n", "\n", text)
