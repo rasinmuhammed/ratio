@@ -8,9 +8,19 @@ from typing import Any, Callable, Iterable, Iterator
 
 from rag.ingest import Document
 
-TARGET_SIZE = 1200
-OVERLAP = 150
-MIN_CHUNK_SIZE = 100
+# Measured with the injected `length` function, normally the model's tokenizer.
+TARGET_SIZE = 450
+MIN_CHUNK_SIZE = 40
+
+# Characters, not tokens. Slicing a string is character-indexed, so any value
+# handed to a slicer must be in characters. The _CHARS suffix keeps the unit
+# from going implicit again.
+OVERLAP_CHARS = 200
+
+# The hard split converts `size` to characters using each string's own ratio,
+# then rounds down by this factor so an underestimate never overshoots budget.
+HARD_SPLIT_SAFETY = 0.9
+
 MIN_NUMBERED_PARAS = 5
 
 _NUMBERED_PARA = re.compile(r'^[ \t]*(\d{1,4})\.[ \t]+(?=[A-Z"(\'])', re.M)
@@ -75,21 +85,47 @@ def _split_units(text: str, size: int, length: Callable[[str], int]) -> list[str
                 out.extend(_split_units(part, size, length))
             return out
 
-    return [text[i : i + size] for i in range(0, len(text), size)]
+    return _hard_split(text, size, length)
+
+
+def _hard_split(text: str, size: int, length: Callable[[str], int]) -> list[str]:
+    """Last resort. Cannot fail, so the recursion above always terminates.
+
+    Slicing is character-indexed but `size` is measured by `length`, which
+    counts tokens. Convert using this string's own ratio rather than a global
+    constant, because citation-dense legal text tokenizes very differently
+    from narrative prose. Round down, then verify each piece and halve it if
+    the estimate still overshot.
+    """
+    tokens = max(length(text), 1)
+    width = max(1, int(size * (len(text) / tokens) * HARD_SPLIT_SAFETY))
+
+    pieces: list[str] = []
+    start = 0
+    while start < len(text):
+        end = min(start + width, len(text))
+        while length(text[start:end]) > size and end - start > 1:
+            end = start + max(1, (end - start) // 2)
+        pieces.append(text[start:end])
+        start = end
+    return pieces
 
 JOIN = "\n\n"
 
 
-def _overlap_tail(body: str, overlap: int) -> str:
-    """Last `overlap` chars, snapped forward to a word boundary.
+def _overlap_tail(body: str, overlap_chars: int) -> str:
+    """Last `overlap_chars` characters, snapped forward to a word boundary.
 
     Slicing blindly lands mid-word ('ct empowers...'). Cutting at the first
     whitespace inside the window costs a few characters and keeps the tail
     readable. Falls back to the raw slice if the window has no whitespace.
+
+    Characters, not tokens: `_pack` measures the returned tail with `length()`
+    for its budget arithmetic, so the two units meet correctly there.
     """
-    if overlap <= 0:
+    if overlap_chars <= 0:
         return ""
-    tail = body[-overlap:]
+    tail = body[-overlap_chars:]
     space = tail.find(" ")
     if space == -1:
         return tail
@@ -97,7 +133,7 @@ def _overlap_tail(body: str, overlap: int) -> str:
     return snapped if snapped.strip() else tail
 
 
-def _pack(units: Iterable[str], size: int, overlap: int,
+def _pack(units: Iterable[str], size: int, overlap_chars: int,
           length: Callable[[str], int]) -> Iterator[str]:
     """Greedily combine units into chunks of at most `size`.
 
@@ -116,7 +152,7 @@ def _pack(units: Iterable[str], size: int, overlap: int,
         if buffer and current + added > size:
             body = JOIN.join(buffer)
             yield body
-            tail = _overlap_tail(body, overlap)
+            tail = _overlap_tail(body, overlap_chars)
             # The carried tail plus the unit that just overflowed must still
             # fit, otherwise the very next chunk starts already over budget.
             if tail and length(tail) + join_len + unit_len > size:
@@ -139,13 +175,17 @@ def _pack(units: Iterable[str], size: int, overlap: int,
 def chunk_document(
         doc: Document,
         size: int = TARGET_SIZE,
-        overlap: int = OVERLAP,
+        overlap_chars: int = OVERLAP_CHARS,
         min_size: int = MIN_CHUNK_SIZE,
         length: Callable[[str], int] = len,
         add_context: bool = True,
 ) -> Iterator[Chunk]:
-    if overlap >= size:
-        raise ValueError(f"Overlap ({overlap}) must be less than size ({size})")
+    # `size` is measured by `length` (tokens) and `overlap_chars` is characters,
+    # so they cannot be compared. Forward progress is instead guaranteed inside
+    # _pack, which drops the carried tail when it would not leave room for the
+    # unit that overflowed.
+    if overlap_chars < 0:
+        raise ValueError(f"overlap_chars ({overlap_chars}) must not be negative")
 
     prefix = context_prefix(doc) if add_context else ""
     budget = size - (length(prefix) + 2 if prefix else 0)
@@ -155,7 +195,7 @@ def chunk_document(
     units = _split_units(doc.text, budget, length)
 
     index = 0
-    for body in _pack(units, budget, overlap, length):
+    for body in _pack(units, budget, overlap_chars, length):
         body = body.strip()
         if length(body) < min_size:
             continue

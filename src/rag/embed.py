@@ -14,7 +14,7 @@ from rag.chunk import Chunk
 
 logger = logging.getLogger(__name__)
 
-MODEL_NAME="sentence-transformers/all-MiniLM-L6-v2"
+MODEL_NAME = "BAAI/bge-small-en-v1.5"
 BATCH_SIZE = 64
 SHARD_SIZE = 50_000
 INDEX_DIR = Path("data/index")
