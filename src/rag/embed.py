@@ -38,9 +38,16 @@ def build_index(
         batch_size: int = BATCH_SIZE,
         shard_size: int = SHARD_SIZE,
         device: str | None = None,
+        model: SentenceTransformer | None = None,
 ) -> dict:
+    """Embed chunks and write vectors, ids and metadata.
+
+    Pass an already-loaded `model` to avoid a second load. The caller usually
+    has one already, because chunking needs its tokenizer for length.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
-    model = load_model(model_name, device)
+    if model is None:
+        model = load_model(model_name, device)
     limit = model.max_seq_length
     tok_len = token_length(model)
 
@@ -63,14 +70,25 @@ def build_index(
         shard = []
         shard_no += 1
 
-    for chunk in chunks:
-        if tok_len(chunk.text) > limit:
-            truncated += 1
-        ids.append(chunk.id)
-        shard.append(chunk.text)
-        total += 1
-        if len(shard) >= shard_size:
-            flush()
+    # Chunk text and metadata, one JSON object per line, in the same order as
+    # the vectors. Retrieval can rank by vector but has nothing to display
+    # without this. Written incrementally so memory stays flat.
+    with (out_dir / "payloads.jsonl").open("w") as payloads:
+        for chunk in chunks:
+            if tok_len(chunk.text) > limit:
+                truncated += 1
+            ids.append(chunk.id)
+            shard.append(chunk.text)
+            payloads.write(json.dumps({
+                "id": chunk.id,
+                "doc_id": chunk.doc_id,
+                "index": chunk.index,
+                "text": chunk.text,
+                "metadata": chunk.metadata,
+            }) + "\n")
+            total += 1
+            if len(shard) >= shard_size:
+                flush()
 
     flush()
 
