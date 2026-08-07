@@ -24,12 +24,21 @@ DEFAULT_K = 5
 
 @dataclass(frozen=True, slots=True)
 class Result:
+    """One retrieved chunk.
+
+    `score` is only meaningful alongside `score_type`, because the retrievers
+    return incomparable units: dense cosine sits in roughly 0.5-0.8, while
+    fused RRF values are around 0.03. Naming the unit keeps it from going
+    implicit, the same mistake that made OVERLAP silently mean characters.
+    """
+
     rank: int
     score: float
     chunk_id: str
     doc_id: str
     text: str
     metadata: dict[str, Any]
+    score_type: str = "cosine"
 
 def rank(query_vec: np.ndarray, vectors: np.ndarray, k: int
          ) -> tuple[np.ndarray, np.ndarray]:
