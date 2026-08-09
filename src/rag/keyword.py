@@ -86,3 +86,28 @@ class BM25Index:
 
     def __len__(self) -> int:
         return self.n
+
+class KeywordRetriever:
+    """BM25 behind the same interface as Retriever and HybridRetriever.
+    """
+    def __init__(self, payloads: list[dict]) -> None:
+        self.payloads = payloads
+        self.index = BM25Index([p["text"] for p in payloads], [p["id"] for p in payloads])
+
+    def search(self, query: str, k: int = 5):
+        from rag.retrieve import Result
+
+        results = []
+        for rank, match in enumerate(self.index.search(query, k=k), start=1):
+            p = self.payloads[match.index]
+            results.append(Result(
+                rank=rank,
+                score=float(match.score),
+                chunk_id=p["id"],
+                doc_id=p["doc_id"],
+                text=p["text"],
+                metadata=p["metadata"],
+                score_type="bm25",
+            ))
+
+        return results

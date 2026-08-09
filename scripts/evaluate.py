@@ -1,0 +1,59 @@
+"""Sweep every retrieval configuration over the labelled query set.
+
+    uv run python scripts/evaluate.py
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+
+from rag.evaluate import evaluate, load_labels, summarise
+from rag.hybrid import HybridRetriever
+from rag.keyword import KeywordRetriever
+from rag.retrieve import Retriever
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--k", type=int, default=5)
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.WARNING)
+
+    queries = load_labels()
+    dense = Retriever()
+
+    # Every config reuses the one loaded model and payload set. Constructing
+    # HybridRetriever separately per config would reload both each time.
+    configs = {
+        "dense": dense,
+        "bm25": KeywordRetriever(dense.payloads),
+        "hybrid 1:1": HybridRetriever(),
+        "hybrid 1:3": _Weighted(HybridRetriever(), keyword_weight=3.0),
+    }
+
+    print(f"{len(queries)} queries, k={args.k}\n")
+    header = f"{'config':<14}{'recall':>9}{'precision':>11}{'MRR':>8}"
+    print(header)
+    print("-" * len(header))
+
+    for name, searcher in configs.items():
+        summary = summarise(evaluate(searcher, queries, k=args.k))["all"]
+        print(f"{name:<14}{summary['recall']:>9.3f}"
+              f"{summary['precision']:>11.3f}{summary['mrr']:>8.3f}")
+
+
+class _Weighted:
+    """Pins fusion weights so a weighted hybrid satisfies Searcher."""
+
+    def __init__(self, hybrid: HybridRetriever, keyword_weight: float) -> None:
+        self.hybrid = hybrid
+        self.keyword_weight = keyword_weight
+
+    def search(self, query: str, k: int = 5):
+        return self.hybrid.search(query, k=k, keyword_weight=self.keyword_weight)
+
+
+if __name__ == "__main__":
+    main()
