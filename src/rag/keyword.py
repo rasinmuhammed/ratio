@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+from array import array
 from collections import Counter, defaultdict
 from typing import NamedTuple
 
@@ -35,33 +36,59 @@ def tokenize(text: str) -> list[str]:
     return _TOKEN.findall(text.lower())
 
 class BM25Index:
+    """An inverted index: term -> the chunks containing it, with counts.
+
+    The obvious layout keeps a Counter per chunk *and* a postings list per
+    term. That stores the same fact twice, and at corpus scale it decides
+    whether the index fits in memory: measured on 200 documents it projects to
+    3.7 GB across the full 10,588, before the payloads and the embedding model
+    are accounted for.
+
+    So term frequency lives in the postings, beside the chunk index it belongs
+    to, in two parallel array.array buffers. A list of ints costs a pointer
+    plus a boxed integer per element; an array stores the machine integer and
+    nothing else.
+    """
+
     def __init__(self, texts: list[str], ids: list[str]) -> None:
         if len(texts) != len(ids):
             raise ValueError(f"texts/ids mismatch: {len(texts)} vs {len(ids)}")
 
         self.ids = ids
         self.n = len(texts)
-        self.doc_freq: Counter[str] = Counter()
-        self.term_freqs: list[Counter[str]] = []
         self.lengths: list[int] = []
 
-        self.postings: defaultdict[str, list[int]] = defaultdict(list)
+        # term -> (chunk indices as 'i', term frequencies as 'H'). 'H' caps a
+        # count at 65,535; the chunker caps a chunk at 450 tokens, so a single
+        # term cannot come near it.
+        self.postings: dict[str, tuple[array, array]] = {}
 
         for i, text in enumerate(texts):
             tokens = tokenize(text)
-            tf = Counter(tokens)
-            self.term_freqs.append(tf)
             self.lengths.append(len(tokens))
-            for term in tf:
-                self.doc_freq[term] += 1
-                self.postings[term].append(i)
+
+            # The Counter is transient, built and dropped once per chunk, so
+            # the peak is one Counter rather than one per chunk. That is where
+            # the saving comes from.
+            for term, count in Counter(tokens).items():
+                entry = self.postings.get(term)
+                if entry is None:
+                    entry = (array("i"), array("H"))
+                    self.postings[term] = entry
+                entry[0].append(i)
+                entry[1].append(count)
 
         self.avg_length = sum(self.lengths) / self.n if self.n else 0.0
 
     def idf(self, term: str) -> float:
         """Rarer terms carry more signal. The +0.5 smoothing is the standard
-        BM25 variant and keeps idf positive for very common terms."""
-        df = self.doc_freq.get(term, 0)
+        BM25 variant and keeps idf positive for very common terms.
+
+        Document frequency is not stored separately: it is the length of the
+        postings list, which is the same number by construction.
+        """
+        entry = self.postings.get(term)
+        df = len(entry[0]) if entry is not None else 0
         return math.log(1 + (self.n - df + 0.5) / (df + 0.5))
 
     def search(self, query: str, k: int = 5) -> list[Match]:
@@ -72,12 +99,12 @@ class BM25Index:
 
         scores: defaultdict[int, float] = defaultdict(float)
         for term in terms:
-            postings = self.postings.get(term)
-            if not postings:
+            entry = self.postings.get(term)
+            if entry is None:
                 continue
+            indices, freqs = entry
             idf = self.idf(term)
-            for i in postings:
-                tf = self.term_freqs[i][term]
+            for i, tf in zip(indices, freqs):
                 norm = 1 - B + B * (self.lengths[i] / self.avg_length)
                 scores[i] += idf * (tf * (K1 + 1)) / (tf + K1 * norm)
 

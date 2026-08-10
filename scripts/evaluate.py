@@ -1,36 +1,43 @@
 """Sweep every retrieval configuration over the labelled query set.
 
     uv run python scripts/evaluate.py
+    uv run python scripts/evaluate.py --index data/index-full \
+        --labels data/labels-full.json
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+from pathlib import Path
 
-from rag.evaluate import evaluate, load_labels, summarise
+from rag.evaluate import LABELS_PATH, evaluate, load_labels, summarise
 from rag.hybrid import HybridRetriever
 from rag.keyword import KeywordRetriever
 from rag.retrieve import Retriever
+
+INDEX_DIR = Path("data/index")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--k", type=int, default=5)
+    parser.add_argument("--index", type=Path, default=INDEX_DIR)
+    parser.add_argument("--labels", type=Path, default=LABELS_PATH)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.WARNING)
 
-    queries = load_labels()
-    dense = Retriever()
+    queries = load_labels(args.labels)
+    dense = Retriever(args.index)
 
     # Every config reuses the one loaded model and payload set. Constructing
     # HybridRetriever separately per config would reload both each time.
     configs = {
         "dense": dense,
         "bm25": KeywordRetriever(dense.payloads),
-        "hybrid 1:1": HybridRetriever(),
-        "hybrid 1:3": _Weighted(HybridRetriever(), keyword_weight=3.0),
+        "hybrid 1:1": HybridRetriever(args.index),
+        "hybrid 1:3": _Weighted(HybridRetriever(args.index), keyword_weight=3.0),
     }
 
     print(f"{len(queries)} queries, k={args.k}\n")
