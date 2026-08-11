@@ -24,20 +24,30 @@ def main() -> None:
     parser.add_argument("--k", type=int, default=5)
     parser.add_argument("--index", type=Path, default=INDEX_DIR)
     parser.add_argument("--labels", type=Path, default=LABELS_PATH)
+    parser.add_argument("--limit", type=int, default=None,
+                        help="evenly spaced subsample of the label set")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.WARNING)
 
     queries = load_labels(args.labels)
-    dense = Retriever(args.index)
+    if args.limit:
+        # Deterministic subsample. The full sweep over 7,323 queries takes
+        # hours, and a fixed sample answers the same question in minutes.
+        queries = queries[::max(1, len(queries) // args.limit)][:args.limit]
 
-    # Every config reuses the one loaded model and payload set. Constructing
-    # HybridRetriever separately per config would reload both each time.
+    # Everything is derived from one HybridRetriever, so there is exactly one
+    # copy of the vectors, the payloads and the BM25 index in memory. Building
+    # each config independently costs three of each, which at 414,122 chunks
+    # is more memory than this machine has.
+    hybrid = HybridRetriever(args.index)
+    dense = hybrid.dense
+
     configs = {
         "dense": dense,
-        "bm25": KeywordRetriever(dense.payloads),
-        "hybrid 1:1": HybridRetriever(args.index),
-        "hybrid 1:3": _Weighted(HybridRetriever(args.index), keyword_weight=3.0),
+        "bm25": KeywordRetriever(dense.payloads, hybrid.keyword),
+        "hybrid 1:1": hybrid,
+        "hybrid 1:3": _Weighted(hybrid, keyword_weight=3.0),
     }
 
     print(f"{len(queries)} queries, k={args.k}\n")

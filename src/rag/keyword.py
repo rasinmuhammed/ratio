@@ -116,10 +116,16 @@ class BM25Index:
 
 class KeywordRetriever:
     """BM25 behind the same interface as Retriever and HybridRetriever.
+
+    An already-built index can be passed in. HybridRetriever holds one, and on
+    a full-corpus index building a second costs a gigabyte to arrive at the
+    same object.
     """
-    def __init__(self, payloads: list[dict]) -> None:
+    def __init__(self, payloads: list[dict], index: BM25Index | None = None) -> None:
         self.payloads = payloads
-        self.index = BM25Index([p["text"] for p in payloads], [p["id"] for p in payloads])
+        if index is None:
+            index = BM25Index([p["text"] for p in payloads], [p["id"] for p in payloads])
+        self.index = index
 
     def search(self, query: str, k: int = 5):
         from rag.retrieve import Result
