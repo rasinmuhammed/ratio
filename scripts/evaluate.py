@@ -15,6 +15,7 @@ from rag.evaluate import LABELS_PATH, evaluate, load_labels, summarise
 from rag.hybrid import HybridRetriever
 from rag.keyword import KeywordRetriever
 from rag.retrieve import Retriever
+from rag.route import RoutedRetriever
 
 INDEX_DIR = Path("data/index")
 
@@ -48,6 +49,10 @@ def main() -> None:
         "bm25": KeywordRetriever(dense.payloads, hybrid.keyword),
         "hybrid 1:1": hybrid,
         "hybrid 1:3": _Weighted(hybrid, keyword_weight=3.0),
+        # Hybrid is the semantic branch for now. Which retriever belongs there
+        # is a question about conceptual queries, and there are no conceptual
+        # labels yet to answer it with.
+        "routed": RoutedRetriever(hybrid, dense.payloads),
     }
 
     print(f"{len(queries)} queries, k={args.k}\n")
