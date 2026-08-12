@@ -30,6 +30,21 @@ MAX_ANSWER_TOKENS = 800
 # parsing natural language.
 REFUSAL = "INSUFFICIENT_CONTEXT"
 
+# The prompt as it stood before stance labelling existed. Kept so the change
+# can be measured against it: with only the per-source notes toggled, both arms
+# still carried the stance rules below and the comparison showed nothing.
+SYSTEM_PROMPT_PLAIN = f"""You answer questions about Indian court judgments using \
+only the numbered sources provided.
+
+Rules:
+- Use ONLY the sources below. Do not use outside knowledge.
+- Cite every factual claim with the source number in square brackets, e.g. [2].
+- If the sources do not contain enough information to answer, reply with \
+exactly this and nothing else: {REFUSAL}
+- Quote the judgment's language where precision matters.
+- You are summarising what these judgments say. You are not giving legal advice.
+"""
+
 SYSTEM_PROMPT = f"""You answer questions about Indian court judgments using \
 only the numbered sources provided.
 
@@ -143,12 +158,17 @@ def build_prompt(
         chunks: list[Result],
         budget: int = CONTEXT_BUDGET,
         length: Callable[[str], int] = len,
+        stance_notes: bool = True,
     ) -> tuple[str, list[Result]]:
     """Assemble the user prompt, returning it and the chunks that fit.
 
     Greedy in rank order, stopping at the first chunk that would overflow
     rather than skipping it. Skipping would let a lower-ranked chunk displace
     a higher-ranked one, which is not obviously an improvement.
+
+    `stance_notes` exists so the labelled and unlabelled prompts can be run
+    against the same sources and compared. Without it the old behaviour is
+    unreachable and the claim that labelling changes anything is untestable.
     """
     used: list[Result] = []
     blocks: list[str] = []
@@ -158,7 +178,8 @@ def build_prompt(
         # The stance note is counted against the budget rather than added
         # afterwards, otherwise every source silently costs more than the
         # accounting says and the context overflows near the limit.
-        block = f"[{len(used) + 1}] ({describe(chunk.text)}) {chunk.text}"
+        note = f"({describe(chunk.text)}) " if stance_notes else ""
+        block = f"[{len(used) + 1}] {note}{chunk.text}"
         cost = length(block)
         if used and spent + cost > budget:
             break
@@ -198,6 +219,7 @@ def answer(
     k: int = 5,
     budget: int = CONTEXT_BUDGET,
     length: Callable[[str], int] = len,
+    stance_notes: bool = True,
 ) -> Answer:
     if not query or not query.strip():
         raise ValueError("query must not be empty")
@@ -209,8 +231,13 @@ def answer(
     scores = [c.score for c in chunks]
     gap = (max(scores) - median(scores)) if scores else 0.0
 
-    prompt, used = build_prompt(query, chunks, budget=budget, length=length)
-    text = llm.complete(SYSTEM_PROMPT, prompt)
+    prompt, used = build_prompt(query, chunks, budget=budget, length=length,
+                                stance_notes=stance_notes)
+    # The system prompt moves with the flag. Toggling only the per-source notes
+    # leaves the stance rules in place, so both arms behave the same way and
+    # the comparison measures nothing.
+    system = SYSTEM_PROMPT if stance_notes else SYSTEM_PROMPT_PLAIN
+    text = llm.complete(system, prompt)
     refused, cited, invalid = parse_answer(text, len(used))
 
     if invalid:
