@@ -22,55 +22,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import re
 from pathlib import Path
+
+from rag.stance import classify as stance
 
 INDEX_DIR = Path("data/index-full")
 QUERIES = Path("data/conceptual_queries.txt")
-
-# What a party said. These are reporting verbs: the judgment is describing a
-# position, not adopting one.
-ARGUMENT = re.compile(
-    r"\b(?:"
-    r"learned\s+(?:counsel|advocate|senior\s+counsel|standing\s+counsel)"
-    r"|it\s+(?:was|is)\s+(?:submitted|contended|urged|argued)"
-    r"|(?:submitted|contended|urged|argued)\s+(?:that|by)"
-    r"|on\s+behalf\s+of\s+the\s+(?:petitioner|respondent|appellant|applicant)"
-    r"|the\s+(?:petitioner|respondent|appellant|applicant)\s+"
-    r"(?:submits|contends|urges|argues|submitted|contended)"
-    r")\b",
-    re.I,
-)
-
-# What the court decided. First person plural and decisional verbs, which a
-# judgment reserves for its own voice.
-HOLDING = re.compile(
-    r"\b(?:"
-    r"we\s+(?:are\s+of\s+the\s+(?:opinion|view)|hold|find|are\s+satisfied|conclude)"
-    r"|in\s+our\s+(?:considered\s+)?(?:opinion|view|judgment)"
-    r"|it\s+is\s+(?:held|well\s+settled)"
-    r"|this\s+court\s+(?:holds|is\s+of\s+the\s+view)"
-    r"|the\s+law\s+is\s+(?:well\s+)?settled"
-    r"|we\s+are\s+unable\s+to\s+accept"
-    r")\b",
-    re.I,
-)
-
-
-def stance(text: str) -> str:
-    """Coarse on purpose. A 450 token chunk can hold both voices, and how
-    often it does is itself the question: a chunk carrying an argument and its
-    rejection is safe, one carrying only the argument is not."""
-    argument = bool(ARGUMENT.search(text))
-    holding = bool(HOLDING.search(text))
-    if argument and holding:
-        return "both"
-    if argument:
-        return "argument"
-    if holding:
-        return "holding"
-    return "neither"
-
 
 def report(name: str, counts: dict[str, int]) -> None:
     total = sum(counts.values()) or 1

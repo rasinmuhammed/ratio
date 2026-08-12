@@ -6,12 +6,21 @@ contradict the third. "Learned counsel submitted that limitation does not
 apply" is a proposition that may be rejected two paragraphs later.
 
 Nothing in cosine similarity or BM25 can see that. Both score a passage on
-whether it discusses limitation, not on whether the court agreed. Measured on
-the full index, 10% to 17% of retrieved chunks record a party's position with
-no sign of the court's own view, and 21% of the corpus does. Handed to a model
-as an undifferentiated source, such a chunk produces a fluent statement of the
-opposite of the law with a correct citation attached, which is the worst
-failure available here: wrong and credible.
+whether it discusses limitation, not on whether the court agreed. Handed to a
+model as an undifferentiated source, an argument passage produces a fluent
+statement of the opposite of the law with a correct citation attached, which is
+the worst failure available here: wrong and credible.
+
+How often that happens is smaller than it first looked. Measured on the full
+index the corpus is 13.3% argument against 12.9% holding, close to even, and
+retrieval already prefers holdings by two to three times: dense returns 5.3%
+argument against 16.0% holding, BM25 10.7% against 20.7%. So this is a hazard
+of roughly one source in ten to twenty rather than a systemic bias.
+
+An earlier version of these patterns reported 21% argument against 5.8%
+holding, and that gap was an artifact: "it was held" did not match, which is
+the most common way an Indian judgment states law. The number said the corpus
+was argument-heavy by 3.6 to 1 when it is closer to even.
 
 This does not filter anything. A contention is often exactly what a user asked
 about, and a passage carrying an argument together with its rejection is the
@@ -35,31 +44,50 @@ HOLDING = "holding"
 BOTH = "both"
 NEITHER = "neither"
 
-# What a party said. These are reporting verbs: the judgment is describing a
-# position rather than adopting one.
+# What a party said. A reporting verb is required in every branch: the earlier
+# version accepted a bare "learned counsel", which fires on the appearance
+# block at the head of a judgment ("Shri S.D. Shukla, learned counsel for the
+# applicants") where nobody has argued anything yet. Validation against a
+# language model put that row at 32% agreement, and the appearance lines were
+# a large part of why.
+_SPEAKER = r"(?:learned\s+(?:senior\s+|standing\s+|additional\s+)?(?:counsel|advocate|" \
+           r"government\s+pleader)|the\s+(?:petitioner|respondent|appellant|applicant)s?)"
+_ARGUES = r"(?:submits?|submitted|contends?|contended|urges?|urged|argues?|argued|" \
+          r"cont(?:e|a)nds?|pleaded)"
+
 _ARGUMENT = re.compile(
     r"\b(?:"
-    r"learned\s+(?:counsel|advocate|senior\s+counsel|standing\s+counsel)"
-    r"|it\s+(?:was|is)\s+(?:submitted|contended|urged|argued)"
-    r"|(?:submitted|contended|urged|argued)\s+(?:that|by)"
-    r"|on\s+behalf\s+of\s+the\s+(?:petitioner|respondent|appellant|applicant)"
-    r"|the\s+(?:petitioner|respondent|appellant|applicant)\s+"
-    r"(?:submits|contends|urges|argues|submitted|contended)"
-    r")\b",
+    # A speaker and a reporting verb, with room for an intervening phrase such
+    # as "for the petitioner" or "appearing on behalf of the State".
+    rf"{_SPEAKER}(?:\W+\w+){{0,8}}?\W+{_ARGUES}"
+    r"|it\s+(?:was|is|has\s+been)\s+(?:submitted|contended|urged|argued)"
+    # "submitted by" is deliberately absent. In "returns submitted by the
+    # dealers" the verb means filed, not argued, and it was a false positive.
+    r"|(?:contended|urged|argued|submitted)\s+that"
+    r"|on\s+behalf\s+of\s+the\s+(?:petitioner|respondent|appellant|applicant)s?"
+    rf"(?:\W+\w+){{0,8}}?\W+{_ARGUES}"
+    r")",
     re.I,
 )
 
-# What the court decided. First person plural and decisional verbs, which a
-# judgment reserves for its own voice.
+# What the court decided, including law it adopts from earlier authority.
+#
+# The costly omission in the first version was "it was held". Indian judgments
+# state law that way constantly, far more often than "it is held", so the
+# pattern missed the most common holding formula in the corpus and made the
+# whole corpus look argument-heavy. Held-in-the-past is still a statement of
+# law, not a submission, whether the court is holding or quoting a holding.
 _HOLDING = re.compile(
     r"\b(?:"
-    r"we\s+(?:are\s+of\s+the\s+(?:opinion|view)|hold|find|are\s+satisfied|conclude)"
+    r"we\s+(?:are\s+of\s+the\s+(?:opinion|view)|hold|held|find|"
+    r"are\s+satisfied|conclude|are\s+unable\s+to\s+accept)"
     r"|in\s+our\s+(?:considered\s+)?(?:opinion|view|judgment)"
-    r"|it\s+is\s+(?:held|well\s+settled)"
-    r"|this\s+court\s+(?:holds|is\s+of\s+the\s+view)"
+    r"|it\s+(?:is|was|has\s+been)\s+(?:held|well\s+settled|settled)"
+    r"|(?:court|bench|judge)\s+(?:has\s+)?held\s+that"
+    r"|(?:this|the)\s+court\s+(?:holds|is\s+of\s+the\s+(?:opinion|view))"
     r"|the\s+law\s+is\s+(?:well\s+)?settled"
-    r"|we\s+are\s+unable\s+to\s+accept"
-    r")\b",
+    r"|(?:having\s+)?considered\s+the\s+(?:rival\s+)?(?:submissions|contentions)"
+    r")",
     re.I,
 )
 
