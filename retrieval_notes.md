@@ -243,7 +243,118 @@ The cost of this choice is that the label set only covers exact-match retrieval.
 
 ---
 
-## Appendix: two measurement mistakes worth recording
+## 7. Authority and voice
+
+Three ideas probed, in order, each one killed or reshaped by measuring it.
+
+### 7.1 A citation graph does not close on this corpus
+
+Judgments cite judgments, so an obvious move is to build the graph and rank by
+authority rather than by similarity alone. The corpus cannot support it.
+
+```
+judgments citing at least one   6,919  (65.3%)
+distinct citations             27,543
+total occurrences              68,354
+with a recoverable case name      605  (0.9% of occurrences)
+
+distinct cited cases with a name  474
+matched to a judgment here         46  (9.7%)
+```
+
+Ten thousand judgments out of the millions on Indian Kanoon means a cited case
+is almost never in the set. **Ninety percent of edges point outside the
+corpus.** The 0.9% name-recovery rate is probably the extraction regex rather
+than the data, but the 9.7% is measured *conditional* on having a name, so
+better extraction does not rescue it.
+
+What the probe found instead is that the dataset already carries `cited_by`,
+which is in-degree computed over the whole of Indian Kanoon rather than over
+this 2% slice, and `court_type`, which gives binding versus persuasive for
+free. Median 6, mean 45.3, max 5,977: three orders of magnitude of signal that
+did not need building.
+
+### 7.2 Retrieval is not authority-blind
+
+The next hypothesis was that similarity ignores authority, so retrieval should
+look like a random draw from the corpus. It does not.
+
+```
+config      median cited_by      mean   supreme court
+corpus                    6        45          15.1%
+dense                    18       145          22.0%
+bm25                     16       142          23.3%
+hybrid                   39       188          26.0%
+```
+
+Every retriever returns judgments cited three to six times more often than
+chance. The likely mechanism is a confound rather than intelligence: heavily
+cited judgments are long and reason explicitly, which is exactly the text a
+doctrinal query matches, and length also produces more chunks and so more
+chances to be drawn.
+
+**Hybrid at 39 against dense and BM25 at roughly 17 is the interesting number.**
+RRF promotes what both systems found, and agreement between a lexical and a
+semantic method is itself evidence that a passage is a canonical statement
+rather than an incidental mention. Fusion is acting as an unintended authority
+filter. Whether that helps or hurts relevance is unanswerable without
+conceptual labels, since "more famous" and "more correct" are different claims.
+
+### 7.3 Whose voice is the passage in
+
+A judgment records what counsel argued as well as what the court held, and the
+two routinely disagree. Similarity cannot tell them apart: both score on
+whether the passage discusses limitation, not on whether the court agreed. A
+retrieved submission handed to a model as an undifferentiated source produces a
+confident statement of the opposite of the law with a correct citation
+attached, which is the worst failure available here.
+
+```
+              argument   holding      both   neither
+corpus           13.3%     12.9%      2.3%     71.4%
+dense             5.3%     16.0%      1.3%     77.3%
+bm25             10.7%     20.7%      4.0%     64.7%
+hybrid            7.3%     20.0%      4.0%     68.7%
+```
+
+The corpus is close to even, and every retriever already prefers holdings two
+to three times over. So the hazard is roughly one source in ten to twenty, not
+a systemic bias. An earlier version of these patterns reported 21% against 5.8%
+and that was a bug, recorded in the appendix.
+
+**Dense returns half as many argument passages as BM25**, 5.3% against 10.7%.
+This is the only measurement anywhere in this project where dense beats BM25,
+and it needed no labels. Argument passages are formulaic, so BM25 matches the
+boilerplate while the embedding attends to substance.
+
+The intervention is not a filter. A contention is often exactly what a user
+asked about, and a passage carrying an argument together with its rejection is
+the most useful text in the corpus. Instead every source reaches the model
+labelled with whose voice it is in, and the system prompt forbids stating a
+submission as the legal position.
+
+**Measured on the same query, same retrieval, same model.** Sources include one
+party submission.
+
+Without labels:
+
+> The Supreme Court has dismissed writ petitions filed after delays of 5
+> months [2], 8 months [2]...
+
+attributing to the Supreme Court a proposition that source [2] records as
+counsel's argument. With labels:
+
+> the petitioner's submission that a writ petition ought to be dismissed on the
+> ground of delay if filed after three years ... is not the court's finding but
+> rather a submission [2]
+
+The control holds: on a query where no argument passage was retrieved, both
+answers say substantively the same thing. This is an existence proof on one
+query, not a rate.
+
+---
+
+## Appendix: four measurement mistakes worth recording
 
 **The model limit was not what the documentation implied.** `max_seq_length` on the loaded model read 256, not the 512 assumed when chunk size was chosen, and the corpus tokenises at 4.18 characters per token rather than the estimated 3.5. **34% of chunks were being silently truncated** before the model saw them, with no error and no warning. Fixed by measuring chunk size with the model's own tokenizer and switching to a model with a real 512 token context.
 
@@ -256,3 +367,34 @@ The cost of this choice is that the label set only covers exact-match retrieval.
 | zxqv nonsense tokens here | 0.603 | 0.483 | 0.120 |
 
 **Nonsense outscored a coherent off-topic question.** No absolute threshold separates them, so refusal cannot be implemented on raw score and is delegated to the model with an explicit sentinel instead.
+
+**A regex bug produced the finding that motivated a whole evening's work.** The
+first stance patterns matched `it is held` but not `it was held`, which is how
+Indian judgments overwhelmingly state law. The corpus came back 21% argument
+against 5.8% holding, and the conclusion drawn from it, that the corpus is
+argument-heavy by 3.6 to 1, was an artifact. Corrected, it is 13.3% against
+12.9%, close to even.
+
+Two further faults surfaced in the same check. A bare `learned counsel` matched
+the appearance block at the head of a judgment, where nobody has argued
+anything yet. `submitted by` matched `returns submitted by the dealers`, where
+the verb means filed rather than argued.
+
+None of this was found by the test suite, which passed throughout. It was found
+by sampling 100 chunks, asking a language model to classify them, and reading
+the disagreements. Agreement went 44% to 52% after the fix, and the `argument`
+row went 32% to 64%. The remaining gap is largely definitional: the model calls
+plain narration `holding`, because a judgment is written in the court's voice
+throughout, so 52% is not an error rate and tuning the judge's prompt until it
+agreed would be circular.
+
+**The first version of the stance comparison measured nothing.** The plan was
+to run the same query with and without stance labels. Toggling the per-source
+notes left the stance rules sitting in the system prompt, so both arms were
+stance-aware and the comparison was between a treatment and itself.
+
+The tell was reading the output rather than the numbers: the *unlabelled*
+answer reproduced the example phrasing from the system prompt almost verbatim.
+Had that gone unread, "the labels work" would have been reported off a run
+where nothing was being compared. The system prompt now moves with the flag,
+and only then did a difference appear.
