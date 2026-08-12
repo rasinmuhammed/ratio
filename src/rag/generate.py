@@ -13,6 +13,7 @@ from typing import Callable, Protocol
 import httpx
 
 from rag.retrieve import Result
+from rag.stance import describe
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +33,20 @@ REFUSAL = "INSUFFICIENT_CONTEXT"
 SYSTEM_PROMPT = f"""You answer questions about Indian court judgments using \
 only the numbered sources provided.
 
+Each source carries a note about whose voice it is in. A judgment records what \
+counsel argued as well as what the court decided, and the two frequently \
+disagree, so a submission is evidence of what was claimed and not of what the \
+law is.
+
 Rules:
 - Use ONLY the sources below. Do not use outside knowledge.
 - Cite every factual claim with the source number in square brackets, e.g. [2].
 - If the sources do not contain enough information to answer, reply with \
 exactly this and nothing else: {REFUSAL}
+- Never state a party's submission as the legal position. If the only support \
+for a point is a submission, say so explicitly, for example "the petitioner \
+argued that ..., though the extract does not record the court's conclusion".
+- Prefer the court's own reasoning over a submission wherever both are present.
 - Quote the judgment's language where precision matters.
 - You are summarising what these judgments say. You are not giving legal advice.
 """
@@ -145,7 +155,10 @@ def build_prompt(
     spent = length(query)
 
     for chunk in chunks:
-        block = f"[{len(used) + 1}] {chunk.text}"
+        # The stance note is counted against the budget rather than added
+        # afterwards, otherwise every source silently costs more than the
+        # accounting says and the context overflows near the limit.
+        block = f"[{len(used) + 1}] ({describe(chunk.text)}) {chunk.text}"
         cost = length(block)
         if used and spent + cost > budget:
             break

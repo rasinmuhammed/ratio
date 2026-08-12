@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from rag.generate import REFUSAL, answer, build_prompt, parse_answer
@@ -31,9 +33,25 @@ class FakeSearcher:
 
 
 def test_prompt_numbers_sources_from_one():
+    """Numbering and text, not exact spacing. Each source also carries a stance
+    note between the number and the text, so asserting the two adjacent would
+    pin a formatting decision rather than the behaviour."""
     prompt, used = build_prompt("q", [_chunk(1, "alpha"), _chunk(2, "beta")])
-    assert "[1] alpha" in prompt and "[2] beta" in prompt
+    assert re.search(r"\[1\].*alpha", prompt)
+    assert re.search(r"\[2\].*beta", prompt)
     assert len(used) == 2
+
+
+def test_prompt_labels_each_source_with_its_stance():
+    """A submission and a holding must not reach the model looking alike. The
+    model cannot tell them apart from the text alone, and stating a party's
+    contention as the law is the failure this exists to prevent."""
+    prompt, _ = build_prompt("q", [
+        _chunk(1, "Learned counsel submitted that the suit is barred."),
+        _chunk(2, "We are of the opinion that the suit is barred."),
+    ])
+    assert "records a party's submission" in prompt
+    assert "the court's own reasoning" in prompt
 
 
 def test_prompt_stops_at_budget():
@@ -127,4 +145,4 @@ def test_answer_computes_score_gap():
 def test_answer_passes_numbered_sources_to_the_model():
     llm = FakeLLM("ok")
     answer("q", FakeSearcher([_chunk(1, "alpha")]), llm)
-    assert "[1] alpha" in llm.last_user
+    assert re.search(r"\[1\].*alpha", llm.last_user)
