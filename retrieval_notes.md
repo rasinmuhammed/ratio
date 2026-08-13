@@ -141,6 +141,36 @@ This is exactly the re-run that section 6 said every result needed.
 
 **Hybrid still never beats BM25**, now at 64x the competing material.
 
+### k=5 was understating everything
+
+k=5 is a search-results-page metric. In RAG the model reads whatever it is
+handed, so what decides whether an answer can be grounded is whether the
+passage is anywhere in the context window. Same 300 queries at k=20, where the
+recall ceiling is 1.000 and the precision ceiling is 0.149:
+
+```
+              k=5                      k=20
+config     recall  prec    MRR      recall  prec    MRR
+dense       0.007  0.004  0.011      0.014  0.002  0.013
+bm25        0.508  0.273  0.516      0.699  0.100  0.532
+hybrid 1:1  0.321  0.163  0.243      0.605  0.085  0.265
+hybrid 1:3  0.498  0.267  0.466      0.699  0.100  0.482
+routed      0.978  0.559  1.000      1.000  0.149  1.000
+```
+
+**Nineteen percent of relevant chunks sit between rank 6 and rank 20.** The k=5
+recall ceiling was 0.978, so almost none of that gap was slot-limiting: those
+chunks were being found and then not looked at. For a generation pipeline that
+is free recall, bought by widening the context rather than by improving
+retrieval.
+
+**Hybrid 1:3 ties BM25 exactly at depth**, 0.699 against 0.699, having trailed
+it at k=5. So fusion's damage is at the top of the ranking and not in what it
+finds at all. The correct chunks stay inside the top twenty and get displaced
+out of the top five. The claim that hybrid never beats BM25 survives, but the
+sharper statement is that **fusion costs precision at rank 1 to 5 and costs
+nothing in recall at the depth a RAG system actually consumes.**
+
 ### Caveats
 
 **Every query in this set is exact-match**, which is precisely the regime dense

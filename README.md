@@ -90,8 +90,14 @@ hybrid 1:3        0.498      0.267   0.466
 routed            0.978      0.559   1.000
 ```
 
-Ceilings for this label set are 0.970 recall@5 and 0.561 precision@5, so BM25
+Ceilings for this label set are 0.978 recall@5 and 0.559 precision@5, so BM25
 retains 52% of what is achievable and dense retains 0.7%.
+
+At k=20, which is closer to what a generation pipeline actually consumes, BM25
+reaches 0.699 and hybrid 1:3 ties it exactly. **Nineteen percent of relevant
+chunks sit between rank 6 and rank 20**, found and then never looked at. So
+fusion costs precision at the top of the ranking and costs nothing in recall at
+the depth that matters.
 
 The `routed` row is close to tautological and should not be read as a retrieval
 result: the labels define a relevant chunk as one containing the literal string,
@@ -131,9 +137,8 @@ benchmark.
   to lose. Whether the semantic path is any good is unevidenced.
 - **Generation is barely measured.** There is a refusal sentinel that works and
   a single stance comparison. No groundedness or faithfulness scoring.
-- **Everything is at k=5**, a search-results-page metric. In RAG the model reads
-  whatever it is given, so recall@20 is what decides whether an answer can be
-  grounded.
+- **Conceptual queries are unlabelled**, so the k=20 rerun below covers
+  exact-match only and says nothing about the semantic path.
 - **Chunk size, overlap and fusion depth are unmeasured guesses**, chosen for
   defensible reasons and never tested.
 - The stance classifier is regex and agrees with a language model on 52% of a
