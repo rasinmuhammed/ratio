@@ -192,17 +192,24 @@ def build_prompt(
 
     return prompt, used
 
-_CITATION = re.compile(r"\[(\d+)\]")
+# A run of one or more bracketed citations, so "[1]", "[1, 3]" and "[1][2]"
+# are all recognised. The earlier pattern was \[(\d+)\], which matches "[1]"
+# and silently ignores "[1, 3]" entirely: the model writes that form regularly,
+# so cited sources were being dropped and every count built on them was low.
+_CITATION = re.compile(r"(?:\[\s*\d+(?:\s*,\s*\d+)*\s*\]\s*)+")
+_NUMBER = re.compile(r"\d+")
+
 
 def parse_answer(text: str, n_sources: int) -> tuple[bool, list[int], list[int]]:
     """Return (refused, cited, invalid_citations)."""
     refused = text.strip().startswith(REFUSAL)
 
     seen: list[int] = []
-    for match in _CITATION.finditer(text):
-        n = int(match.group(1))
-        if n not in seen:
-            seen.append(n)
+    for run in _CITATION.finditer(text):
+        for number in _NUMBER.findall(run.group(0)):
+            n = int(number)
+            if n not in seen:
+                seen.append(n)
 
     cited = [n for n in seen if 1 <= n <= n_sources]
     invalid = [n for n in seen if n < 1 or n > n_sources]
