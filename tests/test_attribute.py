@@ -1,4 +1,4 @@
-from rag.attribute import MIN_CLAIM_CHARS, Claim, split_claims
+from rag.attribute import MIN_CLAIM_CHARS, split_claims
 
 
 def cited(text):
@@ -87,5 +87,44 @@ def test_empty_answer_yields_no_claims():
     assert split_claims("   \n  ") == []
 
 
-def test_short_spans_do_not_become_claims():
-    assert all(len(c.text) >= MIN_CLAIM_CHARS for c in split_claims("Yes [1]."))
+def test_short_spans_between_citations_do_not_become_claims():
+    """Mid-answer fragments merge rather than standing alone. The separate
+    case of an answer that is *entirely* short is covered below, where
+    returning nothing would be worse."""
+    claims = split_claims("The suit was barred by limitation [1], so [2].")
+    assert len(claims) == 1
+    assert len(claims[0].text) >= MIN_CLAIM_CHARS
+
+
+def test_law_report_brackets_are_not_source_citations():
+    """Indian citations are written "[1998] 2 SCC 341" and the model quotes
+    judgment language. An unbounded \\d+ read 1998 as a source number, ate the
+    words before it, and reported a hallucinated citation that never happened,
+    in the metric whose job is to detect hallucinated citations."""
+    claims = split_claims(
+        "The court in [1958] SCR 1226 held that delay defeats equity [2]."
+    )
+    assert len(claims) == 1
+    assert claims[0].cited == [2]
+    assert claims[0].text.startswith("The court in [1958] SCR 1226")
+
+
+def test_a_plausible_hallucinated_source_number_is_still_captured():
+    """The three-digit bound must not hide the thing it sits next to. A model
+    inventing a source cites something near the range it was given."""
+    assert split_claims("The suit was barred by limitation [9].")[0].cited == [9]
+
+
+def test_a_short_answer_still_produces_a_claim():
+    """Every span under the threshold used to return no claims at all, so a
+    short answer dropped out of the aggregate rather than counting against
+    it."""
+    claims = split_claims("Yes [1].")
+    assert len(claims) == 1
+    assert claims[0].cited == [1]
+
+
+def test_an_answer_that_is_only_a_citation_has_no_claim():
+    """The counterpart. There is genuinely no proposition here, so inventing
+    one would be worse than returning nothing."""
+    assert split_claims("[1][2]") == []

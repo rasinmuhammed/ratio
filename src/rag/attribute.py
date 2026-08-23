@@ -32,7 +32,12 @@ from dataclasses import dataclass, replace
 # A run of one or more bracketed citations. Matching a run rather than a single
 # bracket means "[1][2]" and "[1] [2]" attach to the same preceding text, which
 # is what they mean, instead of producing a claim whose entire body is a space.
-_CITATION = re.compile(r"(?:\[\s*\d+(?:\s*,\s*\d+)*\s*\]\s*)+")
+#
+# Three digits maximum, and that bound is load-bearing. Indian law reports are
+# written "[1998] 2 SCC 341" and the model quotes judgment language, so an
+# unbounded \d+ turns a quoted case into a citation of source 1998, eats the
+# words before it, and reports a hallucinated citation that never happened.
+_CITATION = re.compile(r"(?:\[\s*\d{1,3}(?:\s*,\s*\d{1,3})*\s*\]\s*)+")
 _NUMBER = re.compile(r"\d+")
 
 # Below this, a span is connective tissue rather than a proposition: ", and",
@@ -122,5 +127,13 @@ def split_claims(text: str, min_chars: int = MIN_CLAIM_CHARS) -> list[Claim]:
         claims.append(Claim(tail, _dedup(pending), pos))
     elif pending and claims:
         claims[-1] = replace(claims[-1], cited=_dedup(claims[-1].cited + pending))
+
+    if not claims:
+        # Every span fell under the threshold, as in "Yes [1]." Returning
+        # nothing would drop the answer out of the aggregate entirely, and a
+        # short answer is not an answer without claims, it is a short claim.
+        whole = " ".join(_CITATION.sub(" ", text).split())
+        if whole:
+            claims.append(Claim(whole, _dedup(pending), 0))
 
     return claims

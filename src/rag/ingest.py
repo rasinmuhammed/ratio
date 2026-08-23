@@ -5,11 +5,11 @@ Ingestion: raw Huggingface Corpus -> Document Stream.
 from __future__ import annotations
 
 import logging
-import re 
-
+import re
 from collections import Counter, defaultdict
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Any
 
 from datasets import load_from_disk
 

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Iterator
+from typing import Any
 
 from rag.ingest import Document
 
@@ -23,10 +24,10 @@ HARD_SPLIT_SAFETY = 0.9
 
 MIN_NUMBERED_PARAS = 5
 
-_NUMBERED_PARA = re.compile(r'^[ \t]*(\d{1,4})\.[ \t]+(?=[A-Z"(\'])', re.M)
+_NUMBERED_PARA = re.compile(r'^[ \t]*(\d{1,4})\.[ \t]+(?=[A-Z"(\'])', re.MULTILINE)
 _BLANK_LINE = re.compile(r"\n\s*\n")
 _SENTENCE = re.compile(r"(?<=[.?!])\s+")
-_CASE_NO = re.compile(r"\b(?:No\.?\s?\d+\s+of\s+\d{4})", re.I)
+_CASE_NO = re.compile(r"\b(?:No\.?\s?\d+\s+of\s+\d{4})", re.IGNORECASE)
 
 @dataclass(frozen=True, slots=True)
 class Chunk:

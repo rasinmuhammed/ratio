@@ -14,7 +14,6 @@ from pathlib import Path
 from rag.evaluate import LABELS_PATH, evaluate, load_labels, summarise
 from rag.hybrid import HybridRetriever
 from rag.keyword import KeywordRetriever
-from rag.retrieve import Retriever
 from rag.route import RoutedRetriever
 
 INDEX_DIR = Path("data/index")

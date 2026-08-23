@@ -67,7 +67,7 @@ _ARGUMENT = re.compile(
     r"|on\s+behalf\s+of\s+the\s+(?:petitioner|respondent|appellant|applicant)s?"
     rf"(?:\W+\w+){{0,8}}?\W+{_ARGUES}"
     r")",
-    re.I,
+    re.IGNORECASE,
 )
 
 # What the court decided, including law it adopts from earlier authority.
@@ -88,7 +88,7 @@ _HOLDING = re.compile(
     r"|the\s+law\s+is\s+(?:well\s+)?settled"
     r"|(?:having\s+)?considered\s+the\s+(?:rival\s+)?(?:submissions|contentions)"
     r")",
-    re.I,
+    re.IGNORECASE,
 )
 
 # Shown to the model beside each source. Written as plain description rather

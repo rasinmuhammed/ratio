@@ -3,8 +3,8 @@ import json
 import numpy as np
 import pytest
 
-from rag.embed import build_index, load_index, load_model, token_length
 from rag.chunk import Chunk
+from rag.embed import build_index, load_index, load_model, token_length
 
 
 def _write_index(path, ids, vectors, dim=3):

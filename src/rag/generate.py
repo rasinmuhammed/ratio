@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import median
-from typing import Callable, Protocol
+from typing import Protocol
 
 import httpx
 
@@ -196,7 +197,13 @@ def build_prompt(
 # are all recognised. The earlier pattern was \[(\d+)\], which matches "[1]"
 # and silently ignores "[1, 3]" entirely: the model writes that form regularly,
 # so cited sources were being dropped and every count built on them was low.
-_CITATION = re.compile(r"(?:\[\s*\d+(?:\s*,\s*\d+)*\s*\]\s*)+")
+#
+# Numbers are capped at three digits to keep law reports out. Indian citations
+# are written "[1998] 2 SCC 341", and the model quotes judgment language, so an
+# unbounded \d+ reads 1998 as a source number and then reports it as a citation
+# to a source that does not exist. A hallucinated source number is small, near
+# the range actually offered, so nothing real is lost by the bound.
+_CITATION = re.compile(r"(?:\[\s*\d{1,3}(?:\s*,\s*\d{1,3})*\s*\]\s*)+")
 _NUMBER = re.compile(r"\d+")
 
 

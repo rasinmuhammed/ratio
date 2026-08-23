@@ -1,6 +1,10 @@
 from rag.evaluate import (
-    LabelledQuery, evaluate, precision_at_k, recall_at_k,
-    reciprocal_rank, summarise,
+    LabelledQuery,
+    evaluate,
+    precision_at_k,
+    recall_at_k,
+    reciprocal_rank,
+    summarise,
 )
 from rag.retrieve import Result
 

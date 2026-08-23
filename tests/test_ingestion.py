@@ -1,4 +1,4 @@
-from rag.ingest import normalize_text, exclusion_reason
+from rag.ingest import exclusion_reason, normalize_text
 
 
 def test_collapses_space_runs():

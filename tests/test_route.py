@@ -1,4 +1,3 @@
-import pytest
 
 from rag.retrieve import Result
 from rag.route import ExactIndex, RoutedRetriever, classify, extract, normalise

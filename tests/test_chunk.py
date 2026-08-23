@@ -1,11 +1,11 @@
-from rag.ingest import Document
 from rag.chunk import (
     OVERLAP_CHARS,
-    chunk_document,
     _hard_split,
     _overlap_tail,
     _split_numbered,
+    chunk_document,
 )
+from rag.ingest import Document
 
 
 def test_never_exceeds_target():
