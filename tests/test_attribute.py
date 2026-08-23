@@ -128,3 +128,131 @@ def test_an_answer_that_is_only_a_citation_has_no_claim():
     """The counterpart. There is genuinely no proposition here, so inventing
     one would be worse than returning nothing."""
     assert split_claims("[1][2]") == []
+
+
+# ---------------------------------------------------------------------------
+# Step 2: support checking
+# ---------------------------------------------------------------------------
+
+from rag.attribute import (  # noqa: E402
+    MISSING,
+    SUPPORTED,
+    UNCLEAR,
+    UNSUPPORTED,
+    check_claims,
+    summarise,
+)
+
+
+class FakeJudge:
+    """Decides on a keyword in the passage, so the fake controls the verdict
+    rather than leaving it to chance. Also counts calls, because not calling
+    the judge is part of the contract in two cases below."""
+
+    def __init__(self, verdicts=None, raises=0):
+        self.verdicts = verdicts or {}
+        self.raises = raises
+        self.calls = 0
+
+    def complete(self, system, user):
+        self.calls += 1
+        if self.raises:
+            self.raises -= 1
+            raise RuntimeError("rate limited")
+        for key, verdict in self.verdicts.items():
+            if key in user:
+                return verdict
+        return UNSUPPORTED
+
+
+class Src:
+    def __init__(self, text):
+        self.text = text
+
+
+def test_each_claim_is_judged_against_every_source_it_cites():
+    """One claim citing two sources makes two assertions about what those
+    sources say. Collapsing them to one verdict hides one of them."""
+    claims = split_claims("Delay defeats equity [1, 2].")
+    checks = check_claims(claims, [Src("alpha"), Src("beta")], FakeJudge())
+    assert [c.source for c in checks] == [1, 2]
+
+
+def test_uncited_claims_are_never_judged():
+    """There is nothing to judge them against, and inventing an unsupported
+    verdict would conflate 'cited badly' with 'never cited at all'."""
+    judge = FakeJudge()
+    claims = split_claims("This depends entirely on the facts of the case.")
+    assert check_claims(claims, [Src("alpha")], judge) == []
+    assert judge.calls == 0
+
+
+def test_a_citation_to_a_nonexistent_source_is_not_sent_to_the_judge():
+    judge = FakeJudge()
+    claims = split_claims("The suit was barred by limitation [9].")
+    checks = check_claims(claims, [Src("alpha")], judge)
+    assert [c.verdict for c in checks] == [MISSING]
+    assert judge.calls == 0
+
+
+def test_an_unparseable_reply_counts_as_unclear_not_supported():
+    """A judge that will not answer is not evidence of support. Defaulting the
+    other way would inflate every score in the harness."""
+    claims = split_claims("The suit was barred by limitation [1].")
+    checks = check_claims(claims, [Src("alpha")], FakeJudge({"alpha": "maybe?"}))
+    assert checks[0].verdict == UNCLEAR
+
+
+def test_rate_limits_are_retried_rather_than_swallowed():
+    """Giving up on a 429 would silently shrink the sample, and a shrunken
+    sample of the easy cases reads better than the truth."""
+    claims = split_claims("The suit was barred by limitation [1].")
+    judge = FakeJudge({"alpha": SUPPORTED}, raises=2)
+    checks = check_claims(claims, [Src("alpha")], judge, sleep=lambda _: None)
+    assert checks[0].verdict == SUPPORTED
+    assert judge.calls == 3
+
+
+def test_summarise_reports_citation_and_claim_level_separately():
+    """They answer different questions. Citation level measures how honestly
+    the model cites; claim level measures how much of the answer holds up, and
+    is more forgiving because one good source rescues a claim."""
+    claims = split_claims(
+        "The suit was barred [1]. Costs followed the event [2]. "
+        "This depends on the facts of each case."
+    )
+    judge = FakeJudge({"limitation": SUPPORTED})
+    checks = check_claims(
+        claims, [Src("barred by limitation"), Src("silent on costs")], judge
+    )
+    summary = summarise(claims, checks)
+    assert summary["claims"] == 3
+    assert summary["uncited_claims"] == 1
+    assert summary["citation_precision"] == 0.5
+    assert summary["claim_support"] == 0.5
+
+
+def test_a_claim_survives_on_one_good_source_out_of_two():
+    """The reason claim level and citation level diverge."""
+    claims = split_claims("Delay defeats equity in these circumstances [1, 2].")
+    judge = FakeJudge({"good": SUPPORTED})
+    checks = check_claims(claims, [Src("good passage"), Src("bad passage")], judge)
+    summary = summarise(claims, checks)
+    assert summary["citation_precision"] == 0.5
+    assert summary["claim_support"] == 1.0
+
+
+def test_missing_sources_are_excluded_from_precision_but_still_counted():
+    """A citation to a source that was never given is a real failure, but it
+    is not a judgement about a passage, so averaging it into precision would
+    mix two different things."""
+    claims = split_claims("The suit was barred by limitation [1, 9].")
+    judge = FakeJudge({"barred": SUPPORTED})
+    checks = check_claims(claims, [Src("barred by limitation")], judge)
+    summary = summarise(claims, checks)
+    assert summary["missing_sources"] == 1
+    assert summary["citation_precision"] == 1.0
+
+
+def test_an_empty_answer_does_not_divide_by_zero():
+    assert summarise([], [])["citation_precision"] == 0.0

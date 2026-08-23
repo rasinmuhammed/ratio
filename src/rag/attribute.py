@@ -27,6 +27,7 @@ up as a failing test rather than as a wrong percentage at the end.
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, replace
 
 # A run of one or more bracketed citations. Matching a run rather than a single
@@ -137,3 +138,135 @@ def split_claims(text: str, min_chars: int = MIN_CLAIM_CHARS) -> list[Claim]:
             claims.append(Claim(whole, _dedup(pending), 0))
 
     return claims
+
+
+# ---------------------------------------------------------------------------
+# Step 2: does the cited source actually say it
+# ---------------------------------------------------------------------------
+
+SUPPORTED = "supported"
+UNSUPPORTED = "unsupported"
+UNCLEAR = "unclear"
+MISSING = "missing_source"
+
+VERDICTS = (SUPPORTED, UNSUPPORTED, UNCLEAR)
+
+# A source chunk is around 450 tokens. Capped anyway, because a claim that
+# cannot be judged from 2,500 characters will not become judgeable at 5,000,
+# and the cost is paid once per claim-source pair.
+EXCERPT = 2500
+
+JUDGE_SYSTEM = """You check whether a passage from an Indian court judgment \
+supports a specific claim.
+
+Answer with exactly one word:
+
+supported    - the passage states the claim, or the claim follows directly from it
+unsupported  - the passage does not state this, or states something different
+unclear      - the claim is a sentence fragment or too vague to check
+
+Judge only against the passage in front of you. Do not use outside knowledge of \
+Indian law. A claim can be perfectly true in general and still unsupported by \
+this particular passage, and that is "unsupported".
+
+One word. No punctuation, no explanation."""
+
+
+@dataclass(frozen=True, slots=True)
+class Check:
+    """One claim judged against one source it cited.
+
+    The unit is the pair rather than the claim, because a claim citing three
+    sources makes three separate assertions about what those sources say, and
+    collapsing them would hide two of them.
+    """
+
+    claim: Claim
+    source: int          # 1-based, as the model wrote it
+    verdict: str
+
+
+def _ask(llm, passage: str, claim: str, attempts: int = 4,
+         sleep=time.sleep) -> str:
+    """One verdict. Anything the model will not answer cleanly is `unclear`,
+    which is honest: an unparseable reply is not evidence of support."""
+    prompt = f"Passage:\n{passage[:EXCERPT]}\n\nClaim:\n{claim}\n\nVerdict:"
+    for attempt in range(attempts):
+        try:
+            reply = llm.complete(JUDGE_SYSTEM, prompt).strip().lower()
+        except RuntimeError:
+            # Rate limited. Backing off is the only correct response; giving
+            # up would silently shrink the sample and flatter the result.
+            sleep(4 * (attempt + 1))
+            continue
+        word = reply.split()[0].strip(".,:;") if reply.split() else ""
+        return word if word in VERDICTS else UNCLEAR
+    return UNCLEAR
+
+
+def check_claims(claims: list[Claim], sources: list, llm,
+                 sleep=time.sleep) -> list[Check]:
+    """Judge every claim against every source it cited.
+
+    Uncited claims produce no Check at all. That is deliberate: there is
+    nothing to judge them against, and inventing an `unsupported` verdict for
+    them would conflate two different failures. They are counted separately in
+    `summarise`, where the distinction survives.
+
+    `sleep` is injected so the retry path can be tested without a test suite
+    that actually waits twelve seconds. A slow suite stops being run.
+    """
+    checks: list[Check] = []
+    for claim in claims:
+        for number in claim.cited:
+            if not 1 <= number <= len(sources):
+                # The model cited a source that was never given to it. No
+                # point asking a judge about a passage that does not exist.
+                checks.append(Check(claim, number, MISSING))
+                continue
+            verdict = _ask(llm, sources[number - 1].text, claim.text,
+                           sleep=sleep)
+            checks.append(Check(claim, number, verdict))
+    return checks
+
+
+def summarise(claims: list[Claim], checks: list[Check]) -> dict[str, float]:
+    """Two units, reported side by side, because they answer different
+    questions.
+
+    Citation level asks how often the model's citing is honest. Claim level
+    asks how much of the answer a reader can trust, which is what a reader
+    actually wants and is the more forgiving of the two: a claim citing three
+    sources needs only one of them to hold up.
+    """
+    judged = [c for c in checks if c.verdict != MISSING]
+    supported = [c for c in judged if c.verdict == SUPPORTED]
+
+    cited_claims = [c for c in claims if not c.uncited]
+    # Keyed by start offset, which is unique within an answer. Claim holds a
+    # list so it is unhashable, and id() would silently stop working the moment
+    # a caller rebuilt the claims between checking and summarising.
+    backed = {c.claim.start for c in checks if c.verdict == SUPPORTED}
+
+    return {
+        "claims": len(claims),
+        "uncited_claims": sum(1 for c in claims if c.uncited),
+        "uncited_rate": _ratio(sum(1 for c in claims if c.uncited), len(claims)),
+        "citations": len(checks),
+        "missing_sources": sum(1 for c in checks if c.verdict == MISSING),
+        "unclear": sum(1 for c in judged if c.verdict == UNCLEAR),
+        # Of the citations the model made, how many point at a passage that
+        # actually says the thing.
+        "citation_precision": _ratio(len(supported), len(judged)),
+        # Of the claims that cited anything, how many have at least one source
+        # that holds up.
+        "claim_support": _ratio(
+            sum(1 for c in cited_claims if c.start in backed), len(cited_claims)
+        ),
+    }
+
+
+def _ratio(numerator: int, denominator: int) -> float:
+    """Zero rather than a ZeroDivisionError. An answer with no claims has no
+    failure rate, and crashing the harness over it would lose the run."""
+    return numerator / denominator if denominator else 0.0
