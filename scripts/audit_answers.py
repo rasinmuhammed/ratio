@@ -32,7 +32,7 @@ from rag.attribute import (
     split_claims,
     summarise,
 )
-from rag.generate import GroqLLM, answer
+from rag.generate import GROQ_MODEL, GroqLLM, answer
 from rag.hybrid import HybridRetriever
 from rag.route import RoutedRetriever
 
@@ -50,6 +50,8 @@ def main() -> None:
     parser.add_argument("--k", type=int, default=6)
     parser.add_argument("--show", action="store_true",
                         help="print every claim and verdict")
+    parser.add_argument("--judge-model", default="openai/gpt-oss-20b",
+                        help="a different model from the one being audited")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.WARNING)
@@ -64,18 +66,40 @@ def main() -> None:
     hybrid = HybridRetriever(args.index)
     retriever = RoutedRetriever(hybrid, hybrid.dense.payloads)
     llm = GroqLLM()
-    print(f"ready in {time.time() - started:.0f}s", file=sys.stderr)
+
+    # A separate, smaller model does the judging, for two reasons. Asking a
+    # model to mark its own homework invites self-preference bias: it rates
+    # its own phrasing as supported more readily than a stranger's. And the
+    # free tier meters tokens per minute per model, so splitting the work
+    # across two of them roughly doubles the throughput of a long run.
+    judge = GroqLLM(model=args.judge_model)
+    print(f"ready in {time.time() - started:.0f}s "
+          f"(answers: {GROQ_MODEL}, judge: {args.judge_model})", file=sys.stderr)
 
     all_claims, all_checks = [], []
+    truncated = 0
+    uncited_answers = 0
 
     for i, query in enumerate(queries, start=1):
         result = answer(query, retriever, llm, k=args.k)
         if result.refused:
             print(f"[{i}/{len(queries)}] refused: {query}")
             continue
+        if result.truncated:
+            # Excluded, not counted. A cut-off answer is missing citations it
+            # would have made, and scoring it would measure max_tokens rather
+            # than the model.
+            truncated += 1
+            print(f"[{i}/{len(queries)}] TRUNCATED, excluded: {query}")
+            continue
 
         claims = split_claims(result.text)
-        checks = check_claims(claims, result.sources, llm)
+        if not result.cited:
+            # Counted separately. An answer with no citations at all is a
+            # different failure from an answer that cites badly, and folding
+            # it into the uncited-claim rate hides which one is happening.
+            uncited_answers += 1
+        checks = check_claims(claims, result.sources, judge)
         all_claims.extend(claims)
         all_checks.extend(checks)
 
@@ -90,6 +114,9 @@ def main() -> None:
                 print(f"     {label:<24} {claim.text[:60]}")
 
     print(f"\n{RULE}")
+    print(f"  {'answers with no cites':<20} {uncited_answers:>8} of {len(queries)}")
+    if truncated:
+        print(f"  {'truncated (excluded)':<20} {truncated:>8}")
     for key, value in summarise(all_claims, all_checks).items():
         if isinstance(value, float):
             print(f"  {key:<20} {value:>8.3f}")

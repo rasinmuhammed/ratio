@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,13 +20,28 @@ from rag.stance import describe
 logger = logging.getLogger(__name__)
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama-3.3-70b-versatile"
+
+# Overridable, because this is the second time a provider has retired the model
+# underneath the code. llama-3.3-70b-versatile worked on 12 August and returned
+# 404 on 23 August, with every Llama model gone from the catalogue. A hardcoded
+# id turns a provider's roadmap into an outage here.
+#
+#     GROQ_MODEL=openai/gpt-oss-20b uv run python scripts/ask.py "..."
+#
+# Current models: https://api.groq.com/openai/v1/models
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 
 # Measured in whatever unit the injected `length` function returns. Pass
 # token_length(model) and this means tokens; the default len() means
 # characters. The unit is the caller's choice, so it is never implicit.
 CONTEXT_BUDGET = 6000
-MAX_ANSWER_TOKENS = 800
+
+# Reasoning models bill reasoning against the same budget as the answer. On
+# openai/gpt-oss the `reasoning` field routinely runs longer than `content`, so
+# 800, which was ample for a non-reasoning model, truncated real answers before
+# they reached their citations, and the audit then scored the missing citations
+# as the model failing to cite.
+MAX_ANSWER_TOKENS = 2000
 
 # A sentinel rather than free prose, so refusal is detectable in code without
 # parsing natural language.
@@ -67,6 +83,19 @@ argued that ..., though the extract does not record the court's conclusion".
 - You are summarising what these judgments say. You are not giving legal advice.
 """
 
+# Repeated at the end of the user message, not only in the system prompt.
+# openai/gpt-oss ignores the system-prompt citation rule outright on roughly one
+# run in three, producing a fluent answer with no brackets at all, and it does
+# so non-deterministically at temperature 0. Instructions in the last position
+# get followed more reliably. Measured over three trials each, plain had one
+# total failure and this had none, which is suggestive rather than conclusive.
+CITE_REMINDER = (
+    "\nEvery factual sentence must end with its source number in square "
+    "brackets, for example [2]. An answer with no bracketed citations is not "
+    "acceptable."
+)
+
+
 class LLM(Protocol):
     """Anything that turns a prompt into a text.
     Protocol so generation logic never depends on a provider."""
@@ -88,6 +117,7 @@ class Answer:
     cited: list[int]             # 1-based source numbers the model cited
     invalid_citations: list[int] # cited numbers with no matching source
     score_gap: float             # top score minus median, logged not enforced
+    truncated: bool = False      # answer hit max_tokens, so citations may be lost
 
 # ---------------------------------------------------------------------------
 # Provider
@@ -117,6 +147,8 @@ class GroqLLM:
             api_key: str | None = None,
             timeout: float = 60.0,
             max_tokens: int = MAX_ANSWER_TOKENS,
+            retries: int = 6,
+            sleep=time.sleep,
             ) -> None:
         if api_key is None:
             _load_env_file()
@@ -126,29 +158,62 @@ class GroqLLM:
         self.model = model
         self.timeout = timeout
         self.max_tokens = max_tokens
+        self.retries = retries
+        self.sleep = sleep
+        self.last_finish_reason: str | None = None
 
     def complete(self, system: str, user: str) -> str:
-        response = httpx.post(
-            GROQ_URL,
-            headers={"Authorization": f"Bearer {self.api_key}"},
-            json = {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
+        """Retries on 429 rather than raising it.
 
-                "temperature": 0.0,
-                "max_tokens": self.max_tokens,
-            },
-            timeout=self.timeout,
-        )
+        The free tier allows 8,000 tokens per minute, and one audited answer
+        costs more than that, so a rate limit is the expected steady state of a
+        long run and not an error. Retrying belongs here at the provider
+        boundary: the alternative was every caller growing its own backoff
+        loop, which is how attribute._ask and validate_stance each ended up
+        with a slightly different one.
 
-        if response.status_code == 429:
-            raise RuntimeError(f"Groq rate limit hit: {response.text[:200]}")
-        response.raise_for_status()
+        Groq sends `retry-after` when it knows how long to wait. Honouring it
+        beats guessing, and guessing short is worse than waiting.
+        """
+        for attempt in range(self.retries):
+            response = httpx.post(
+                GROQ_URL,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json = {
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
 
-        return response.json()["choices"][0]["message"]["content"].strip()
+                    "temperature": 0.0,
+                    "max_tokens": self.max_tokens,
+                },
+                timeout=self.timeout,
+            )
+
+            if response.status_code != 429:
+                response.raise_for_status()
+                choice = response.json()["choices"][0]
+                # Recorded rather than ignored. A truncated answer has fewer
+                # citations than the model intended, and scoring it as though
+                # it were complete turns a budget setting into a finding about
+                # the model.
+                self.last_finish_reason = choice.get("finish_reason")
+                if self.last_finish_reason == "length":
+                    logger.warning(
+                        "answer truncated at max_tokens=%d, citations may be "
+                        "missing", self.max_tokens,
+                    )
+                return choice["message"]["content"].strip()
+
+            if attempt == self.retries - 1:
+                break
+            wait = float(response.headers.get("retry-after", 0)) or 2 ** attempt * 5
+            logger.info("rate limited, waiting %.0fs", wait)
+            self.sleep(min(wait + 1, 90))
+
+        raise RuntimeError(f"Groq rate limit hit: {response.text[:200]}")
 
 # ---------------------------------------------------------------------------
 # functions
@@ -189,7 +254,8 @@ def build_prompt(
         spent += cost
 
     sources = "\n\n".join(blocks) if blocks else "(no sources retrieved)"
-    prompt = f"Sources:\n\n{sources}\n\nQuestion: {query}\n\nAnswer:"
+    prompt = (f"Sources:\n\n{sources}\n\nQuestion: {query}\n{CITE_REMINDER}"
+              f"\n\nAnswer:")
 
     return prompt, used
 
@@ -259,6 +325,7 @@ def answer(
                        invalid, len(used))
 
     return Answer(
+        truncated=getattr(llm, "last_finish_reason", None) == "length",
         text=text,
         refused=refused,
         sources=used,
