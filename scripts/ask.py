@@ -27,6 +27,7 @@ from pathlib import Path
 from rag.generate import REFUSAL, GroqLLM, answer
 from rag.hybrid import HybridRetriever
 from rag.route import RoutedRetriever, classify
+from rag.rerank import CrossEncoderReranker, RerankedRetriever
 from rag.stance import classify as stance_of
 
 INDEX_DIR = Path("data/index-full")
@@ -98,9 +99,9 @@ def main() -> None:
     print("loading index...", file=sys.stderr)
     started = time.time()
     hybrid = HybridRetriever(args.index)
-    # The router owns the exact index and falls through to hybrid whenever a
-    # query carries no identifier, so this single object handles both kinds.
-    retriever = RoutedRetriever(hybrid, hybrid.dense.payloads)
+    reranked = RerankedRetriever(hybrid, CrossEncoderReranker())
+    retriever = RoutedRetriever(reranked, hybrid.dense.payloads)
+
     llm = GroqLLM()
     print(f"ready in {time.time() - started:.0f}s "
           f"({len(hybrid.dense.payloads):,} chunks, "

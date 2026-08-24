@@ -14,6 +14,7 @@ from pathlib import Path
 from rag.evaluate import LABELS_PATH, evaluate, load_labels, summarise
 from rag.hybrid import HybridRetriever
 from rag.keyword import KeywordRetriever
+from rag.rerank import CrossEncoderReranker, RerankedRetriever
 from rag.route import RoutedRetriever
 
 INDEX_DIR = Path("data/index")
@@ -41,6 +42,8 @@ def main() -> None:
     # each config independently costs three of each, which at 414,122 chunks
     # is more memory than this machine has.
     hybrid = HybridRetriever(args.index)
+    reranker = CrossEncoderReranker()
+
     dense = hybrid.dense
 
     configs = {
@@ -51,6 +54,7 @@ def main() -> None:
         # Hybrid is the semantic branch for now. Which retriever belongs there
         # is a question about conceptual queries, and there are no conceptual
         # labels yet to answer it with.
+        "reranked": RerankedRetriever(hybrid, reranker),
         "routed": RoutedRetriever(hybrid, dense.payloads),
     }
 

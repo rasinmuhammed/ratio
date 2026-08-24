@@ -9,6 +9,7 @@ dependencies = [
     "httpx>=0.28.1",
     "numpy>=2.5.1",
     "sentence-transformers>=5.6.1",
+    "voyageai>=0.5.0",
 ]
 
 [dependency-groups]

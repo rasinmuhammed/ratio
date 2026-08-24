@@ -384,6 +384,85 @@ query, not a rate.
 
 ---
 
+## 8. Reranking: reordering fixes what cannot recover what it never had
+
+Every retriever so far is a bi-encoder: query and passage are each turned into
+a fixed representation before they meet, then compared afterward. Measured
+directly, that architecture cannot tell a query from its negation apart.
+`"when adverse possession is established"` and `"when adverse possession
+cannot be established"` return 6-7 of the same top-10 chunks from dense and
+BM25 alike, because the negation lives in a function word neither
+representation preserves.
+
+A cross-encoder (`bge-reranker-base`) reads query and passage together, so it
+can attend to "cannot" while still reading the query. Run against the same
+four negation pairs, overlap dropped on every pair, most sharply on the two
+worst cases (6-7 of 10 down to 3 of 10). It did not reach zero: a
+general-purpose reranker with no legal fine-tuning narrows the gap rather
+than closes it, and four pairs is a demonstration, not a benchmark.
+
+### A real bug in how deep the reranker actually looked
+
+`RERANK_DEPTH = 50` was meant to give the reranker real room above the top 5,
+since the k=20 rerun found 19% of relevant chunks sitting unlooked-at at rank
+6-20. It did not work as intended. `HybridRetriever.search` has its own
+`depth` parameter (default 20) that caps how many candidates dense and BM25
+each contribute before fusion, separate from `k`. `RerankedRetriever` asked
+for `k=50` and never passed `depth`, so the fused pool topped out at whatever
+20-and-20 produces, confirmed directly at **36 candidates**, not 50.
+
+Fixed by requesting `depth` explicitly, with a `TypeError` fallback for
+retrievers that don't take one:
+
+```
+k=50, default depth=20 -> 36 candidates
+k=50, depth=50 explicit -> 50 candidates
+```
+
+Exact-match benchmark, 300 queries, k=20, before and after:
+
+```
+                    before fix   after fix
+reranked recall        0.700       0.721
+reranked precision     0.100       0.103
+reranked MRR           0.701       0.722
+```
+
+**This is the first result in the project where anything exceeds BM25's 0.699
+recall ceiling** rather than tying or losing to it. Worth stating the
+statistics honestly: standard error on a proportion at n=300 is roughly 0.026,
+so a 0.021 shift is directionally consistent with the mechanism (more real
+candidates can only help or hold recall, not hurt it) but does not clear a
+strict significance bar by itself.
+
+Two caveats on what this table can and cannot claim. First, this is the
+exact-match benchmark: a cross-encoder is a language model reading surface
+text, so it is reasonably good at literal string matching too, which is a
+different and easier skill than the negation problem the reranker was built
+for. A strong MRR here does not by itself validate the negation claim; the
+four-pair probe is still the more direct evidence for that, and it is thin.
+Second, `evaluate.py`'s `reranked` config wraps `hybrid` directly, not routed.
+In the deployed pipeline (`ask.py`), identifier queries never reach the
+reranker at all, so this table measures reranker mechanics on a query type
+the real system would route away from reranking entirely.
+
+### The same bug, still latent elsewhere
+
+`RoutedRetriever` composes with `hybrid` the same way `RerankedRetriever`
+does: `self.semantic.search(query, k=...)`, no `depth`. In `ask.py` this is
+harmless, because the wiring is `RoutedRetriever(RerankedRetriever(hybrid,
+reranker), payloads)` and `RerankedRetriever` already forces `depth=50` on
+`hybrid` internally regardless of what `k` `RoutedRetriever` passes down. But
+`evaluate.py`'s standalone `"routed"` config wraps `hybrid` directly with no
+reranker in between, so its semantic backfill still defaults to `depth=20`.
+Invisible today because `routed` scores 1.000/1.000 on this benchmark and
+exact lookup does all the work. It stops being invisible the moment backfill
+quality is the whole answer, which is precisely the conceptual-query case
+that remains unmeasured. Not fixed, because nothing exercises it yet, but
+worth knowing before it produces a confusing number later.
+
+---
+
 ## Appendix: four measurement mistakes worth recording
 
 **The model limit was not what the documentation implied.** `max_seq_length` on the loaded model read 256, not the 512 assumed when chunk size was chosen, and the corpus tokenises at 4.18 characters per token rather than the estimated 3.5. **34% of chunks were being silently truncated** before the model saw them, with no error and no warning. Fixed by measuring chunk size with the model's own tokenizer and switching to a model with a real 512 token context.
