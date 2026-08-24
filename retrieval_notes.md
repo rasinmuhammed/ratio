@@ -463,6 +463,62 @@ worth knowing before it produces a confusing number later.
 
 ---
 
+## 9. A legal-specialised embedding model, tested rather than trusted
+
+`bge-small-en-v1.5` has never seen legal text, let alone Indian case law. The
+obvious next lever was `voyage-law-2`, trained on roughly a trillion legal
+tokens across US, Chinese, German and Indian law, 1024 dimensions against
+bge-small's 384. On paper this should win comfortably.
+
+Comparing it to the full-corpus bge-small numbers elsewhere in this document
+would be invalid: those numbers come from a 414,122-chunk pool, and a smaller
+pool makes any model look better regardless of embedding quality. So both
+models were run against an identical shared pool instead: 169 chunks backing
+60 sampled labelled queries, plus 500 random distractors, 669 chunks total,
+same queries, same k.
+
+```
+config                     recall  precision     MRR
+bge-small (this pool)       0.227      0.070   0.246
+voyage-law-2                0.204      0.067   0.181
+```
+
+**bge-small won on every metric.** Not by a large margin, but not within noise
+either: the MRR gap (0.246 vs 0.181) means bge-small tends to rank the correct
+chunk higher when it finds one at all, not just find slightly more of them.
+
+### Why the leaderboard claim did not transfer
+
+This is the same pattern MLEB's own search results warned about before this
+was run: on an in-domain legal contract eval, the top-3 MTEB models placed
+5th, 7th and 2nd while an 11th-ranked general model won. MTEB and vendor
+benchmarks are priors, not verdicts, for a specific corpus.
+
+Two plausible mechanisms, neither tested directly here. First, "Indian" in a
+trillion-token training mix dominated by US case law and contract text is
+plausibly a thin slice, and Indian High Court judgments have a specific
+register (`"learned counsel submitted"`, `"it was held"`, the same phrasing
+stance.py's patterns are built around) a US/EU-weighted legal model has
+little reason to have learned well. Second, this pool is drawn from the same
+exact-match, identifier-heavy query set as the rest of this document, and
+voyage-law-2 is still a general bi-encoder at the level that matters here: it
+was not trained to treat a citation number as a token to match exactly rather
+than embed semantically, which is the same root cause behind bge-small's own
+0.7% dense recall on the full corpus. Switching embedding models did not
+touch that mechanism, and the loss pattern is consistent with it not being
+touched.
+
+### What this closes
+
+No further spend on voyage-law-2 is planned. A larger pool or the full corpus
+could in principle flip this, but there is no mechanism identified here that a
+bigger sample would fix: bge-small won on both recall and ranking quality, and
+the explanation above predicts the same loss at full scale rather than
+predicting it would reverse. Re-embedding the full corpus (~186M tokens) to
+test a hypothesis already answered in this direction is not a good bet.
+
+---
+
 ## Appendix: four measurement mistakes worth recording
 
 **The model limit was not what the documentation implied.** `max_seq_length` on the loaded model read 256, not the 512 assumed when chunk size was chosen, and the corpus tokenises at 4.18 characters per token rather than the estimated 3.5. **34% of chunks were being silently truncated** before the model saw them, with no error and no warning. Fixed by measuring chunk size with the model's own tokenizer and switching to a model with a real 512 token context.
