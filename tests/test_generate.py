@@ -2,7 +2,13 @@ import re
 
 import pytest
 
-from rag.generate import REFUSAL, answer, build_prompt, parse_answer
+from rag.generate import (
+    REFUSAL,
+    answer,
+    answer_structured,
+    build_prompt,
+    parse_answer,
+)
 from rag.retrieve import Result
 
 
@@ -146,3 +152,122 @@ def test_answer_passes_numbered_sources_to_the_model():
     llm = FakeLLM("ok")
     answer("q", FakeSearcher([_chunk(1, "alpha")]), llm)
     assert re.search(r"\[1\].*alpha", llm.last_user)
+
+
+# ---------------------------------------------------------------------------
+# answer_structured: same contract as answer(), a different route to it.
+# ---------------------------------------------------------------------------
+
+class FakeStructuredLLM:
+    """Satisfies StructuredLLM without a network call, same role FakeLLM
+    plays for the free-text path."""
+
+    def __init__(self, reply: dict) -> None:
+        self.reply = reply
+        self.last_user: str | None = None
+        self.last_schema: dict | None = None
+
+    def complete_structured(self, system: str, user: str, schema: dict) -> dict:
+        self.last_user = user
+        self.last_schema = schema
+        return self.reply
+
+
+def test_structured_reconstructs_text_in_the_same_bracket_format():
+    """attribute.split_claims and everything downstream of it expects
+    'text [n]'. A structured Answer has to produce exactly that shape even
+    though nothing here ran the bracket regex to get it."""
+    reply = {"refused": False, "claims": [
+        {"text": "The suit was barred by limitation", "source_ids": [1]},
+    ]}
+    result = answer_structured("q", FakeSearcher([_chunk(1, "alpha")]),
+                               FakeStructuredLLM(reply))
+    assert result.text == "The suit was barred by limitation [1]"
+    assert result.cited == [1]
+
+
+def test_structured_joins_multiple_source_ids_on_one_claim():
+    reply = {"refused": False, "claims": [
+        {"text": "Both sources agree", "source_ids": [2, 1]},
+    ]}
+    result = answer_structured(
+        "q", FakeSearcher([_chunk(1, "alpha"), _chunk(2, "beta")]),
+        FakeStructuredLLM(reply),
+    )
+    assert result.text == "Both sources agree [2, 1]"
+    assert result.cited == [2, 1]  # order of first appearance, same as parse_answer
+
+
+def test_structured_detects_refusal():
+    reply = {"refused": True, "claims": []}
+    result = answer_structured("q", FakeSearcher([_chunk(1, "alpha")]),
+                               FakeStructuredLLM(reply))
+    assert result.refused
+    assert result.text == REFUSAL
+    assert result.cited == []
+
+
+def test_structured_flags_hallucinated_citation():
+    reply = {"refused": False, "claims": [
+        {"text": "As held", "source_ids": [3]},
+    ]}
+    result = answer_structured("q", FakeSearcher([_chunk(1, "alpha")]),
+                               FakeStructuredLLM(reply))
+    assert result.invalid_citations == [3]
+    assert result.cited == []
+
+
+def test_structured_drops_a_claim_with_no_source_ids_rather_than_guess():
+    """minItems: 1 in the schema should make this unreachable in practice,
+    same spirit as strict:True for malformed JSON: if it happens anyway,
+    the claim is dropped, not kept with a fabricated source."""
+    reply = {"refused": False, "claims": [
+        {"text": "unsupported claim", "source_ids": []},
+        {"text": "supported claim", "source_ids": [1]},
+    ]}
+    result = answer_structured("q", FakeSearcher([_chunk(1, "alpha")]),
+                               FakeStructuredLLM(reply))
+    assert "unsupported claim" not in result.text
+    assert result.text == "supported claim [1]"
+
+
+def test_structured_handles_empty_dict_from_a_truncated_response():
+    """complete_structured returns {} on truncation/invalid JSON rather than
+    raising. answer_structured must not crash on a missing key, and treats
+    the result as a refusal: refused=false with zero claims is exactly the
+    silent non-answer state the audit found live and this collapse exists
+    to remove, an empty dict is that same shape by construction."""
+    result = answer_structured("q", FakeSearcher([_chunk(1, "alpha")]),
+                               FakeStructuredLLM({}))
+    assert result.text == REFUSAL
+    assert result.refused
+    assert result.cited == []
+
+
+def test_structured_collapses_unrefused_empty_claims_into_a_refusal():
+    """The exact live failure: refused=false, claims=[]. Found on 3 of 15
+    real queries in the first full audit, a silent non-answer that isn't a
+    refusal and isn't a real answer either, inflating precision/support by
+    quietly leaving the denominator instead of counting as a miss."""
+    reply = {"refused": False, "claims": []}
+    result = answer_structured("q", FakeSearcher([_chunk(1, "alpha")]),
+                               FakeStructuredLLM(reply))
+    assert result.refused
+    assert result.text == REFUSAL
+
+
+def test_structured_rejects_empty_query():
+    with pytest.raises(ValueError, match="empty"):
+        answer_structured("   ", FakeSearcher([]), FakeStructuredLLM({}))
+
+
+def test_structured_passes_the_schema_and_omits_the_bracket_reminder():
+    """cite_reminder=False: asking for brackets in prose while also
+    constraining to a JSON schema would contradict the schema, not
+    reinforce it. The GROUNDED_ANSWER_SCHEMA import loop is the check that
+    the right schema, not just some schema, reached the call."""
+    from rag.generate import GROUNDED_ANSWER_SCHEMA
+    llm = FakeStructuredLLM({"refused": False, "claims": []})
+    answer_structured("q", FakeSearcher([_chunk(1, "alpha")]), llm)
+    assert llm.last_schema == GROUNDED_ANSWER_SCHEMA
+    assert "square brackets" not in llm.last_user

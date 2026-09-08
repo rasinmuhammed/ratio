@@ -186,10 +186,20 @@ class Check:
     verdict: str
 
 
-def _ask(llm, passage: str, claim: str, attempts: int = 4,
+def _ask(llm, passage: str, claim: str, attempts: int = 3,
          sleep=time.sleep) -> str:
     """One verdict. Anything the model will not answer cleanly is `unclear`,
-    which is honest: an unparseable reply is not evidence of support."""
+    which is honest: an unparseable reply is not evidence of support.
+
+    attempts dropped from 4 to 3 on 2026-09-07. llm.complete() already
+    retries internally (now 4 attempts, up to 30s wait, for both 429s and
+    transport errors), so this outer loop was multiplying an already-bounded
+    retry into an unbounded-feeling one: 4 outer x 6 inner meant one
+    consistently unlucky claim could burn 30+ minutes before giving up, and a
+    few of those in one query is how a run goes silent for two hours without
+    ever actually being stuck. 3 keeps test_rate_limits_are_retried's
+    guarantee (survives 2 consecutive failures, succeeds on the 3rd) while
+    still cutting the worst case from hours to well under 30 minutes."""
     prompt = f"Passage:\n{passage[:EXCERPT]}\n\nClaim:\n{claim}\n\nVerdict:"
     for attempt in range(attempts):
         try:

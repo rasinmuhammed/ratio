@@ -24,7 +24,7 @@ import sys
 import time
 from pathlib import Path
 
-from rag.generate import REFUSAL, GroqLLM, answer
+from rag.generate import REFUSAL, answer, get_llm
 from rag.hybrid import HybridRetriever
 from rag.route import RoutedRetriever, classify
 from rag.rerank import CrossEncoderReranker, RerankedRetriever
@@ -102,7 +102,7 @@ def main() -> None:
     reranked = RerankedRetriever(hybrid, CrossEncoderReranker())
     retriever = RoutedRetriever(reranked, hybrid.dense.payloads)
 
-    llm = GroqLLM()
+    llm = get_llm()
     print(f"ready in {time.time() - started:.0f}s "
           f"({len(hybrid.dense.payloads):,} chunks, "
           f"{len(retriever.exact):,} identifiers)", file=sys.stderr)

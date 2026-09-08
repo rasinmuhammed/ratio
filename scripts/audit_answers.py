@@ -32,7 +32,8 @@ from rag.attribute import (
     split_claims,
     summarise,
 )
-from rag.generate import GROQ_MODEL, GroqLLM, answer
+from rag.expand import ParentExpandingRetriever
+from rag.generate import GroqLLM, MercuryLLM, answer, answer_structured, get_llm
 from rag.hybrid import HybridRetriever
 from rag.route import RoutedRetriever
 
@@ -51,8 +52,39 @@ def main() -> None:
     parser.add_argument("--show", action="store_true",
                         help="print every claim and verdict")
     parser.add_argument("--judge-model", default="openai/gpt-oss-20b",
-                        help="a different model from the one being audited")
+                        help="a different model from the one being audited, "
+                             "Groq only, ignored when --judge-provider=mercury")
+    parser.add_argument("--judge-provider", choices=["groq", "mercury"],
+                        default="groq",
+                        help="groq (default) is the standard every other "
+                             "number this project has measured was scored "
+                             "against, keep using it for anything meant to "
+                             "be comparable. mercury is faster (seconds, "
+                             "not the multi-minute waits a slow free-tier "
+                             "model under test can otherwise cost per "
+                             "claim) but breaks that comparability: use it "
+                             "for a quick rough read, not the record.")
+    parser.add_argument("--precision-reminder", action="store_true",
+                        help="add the wrong-citation-costs-more-than-no-"
+                             "citation rule to the prompt")
+    parser.add_argument("--expand-context", type=int, default=0, metavar="WINDOW",
+                        help="wrap retrieval in ParentExpandingRetriever with "
+                             "this window size (0 disables it, the default, "
+                             "so this never changes an existing measurement "
+                             "unless asked for)")
+    parser.add_argument("--structured", action="store_true",
+                        help="use answer_structured() with a JSON schema "
+                             "instead of a bracket-in-prose prompt. Mercury "
+                             "only (LLM_PROVIDER=mercury): the schema route "
+                             "needs complete_structured, which GroqLLM does "
+                             "not implement. Incompatible with "
+                             "--precision-reminder, that reminder is about "
+                             "prose citation habits the schema makes moot.")
     args = parser.parse_args()
+
+    if args.structured and args.precision_reminder:
+        parser.error("--structured and --precision-reminder do the same "
+                     "job two different ways; pick one")
 
     logging.basicConfig(level=logging.WARNING)
 
@@ -65,32 +97,55 @@ def main() -> None:
     started = time.time()
     hybrid = HybridRetriever(args.index)
     retriever = RoutedRetriever(hybrid, hybrid.dense.payloads)
-    llm = GroqLLM()
+    if args.expand_context > 0:
+        # Wraps last: RoutedRetriever's exact-match branch also benefits,
+        # and expansion only ever grows .text, never touches chunk_id or
+        # score, so wrapping outermost is safe regardless of what's inside.
+        retriever = ParentExpandingRetriever(
+            retriever, hybrid.by_id, window=args.expand_context,
+        )
+    llm = get_llm()
+    if args.structured and not hasattr(llm, "complete_structured"):
+        parser.error("--structured needs Mercury: "
+                     "LLM_PROVIDER=mercury uv run python "
+                     "scripts/audit_answers.py --structured ...")
 
-    # A separate, smaller model does the judging, for two reasons. Asking a
-    # model to mark its own homework invites self-preference bias: it rates
-    # its own phrasing as supported more readily than a stranger's. And the
-    # free tier meters tokens per minute per model, so splitting the work
-    # across two of them roughly doubles the throughput of a long run.
-    judge = GroqLLM(model=args.judge_model)
+    # A separate model does the judging, for two reasons. Asking a model to
+    # mark its own homework invites self-preference bias: it rates its own
+    # phrasing as supported more readily than a stranger's. And the free
+    # tier meters tokens per minute per model, so splitting the work across
+    # two of them roughly doubles the throughput of a long run.
+    #
+    # groq is the fixed standard every prior number in this project's
+    # history was measured against, still the default for anything meant to
+    # be comparable. --judge-provider mercury trades that comparability for
+    # speed, see its help text; results from it should be read as a rough
+    # check, not filed next to the Groq-judged numbers as if equivalent.
+    judge = MercuryLLM() if args.judge_provider == "mercury" else GroqLLM(model=args.judge_model)
+    judge_label = getattr(judge, "model", type(judge).__name__)
+    answer_model = getattr(llm, "model", type(llm).__name__)
     print(f"ready in {time.time() - started:.0f}s "
-          f"(answers: {GROQ_MODEL}, judge: {args.judge_model})", file=sys.stderr)
+          f"(answers: {answer_model}, judge: {judge_label})", file=sys.stderr)
 
     all_claims, all_checks = [], []
     truncated = 0
     uncited_answers = 0
 
     for i, query in enumerate(queries, start=1):
-        result = answer(query, retriever, llm, k=args.k)
+        if args.structured:
+            result = answer_structured(query, retriever, llm, k=args.k)
+        else:
+            result = answer(query, retriever, llm, k=args.k,
+                            precision_reminder=args.precision_reminder)
         if result.refused:
-            print(f"[{i}/{len(queries)}] refused: {query}")
+            print(f"[{i}/{len(queries)}] refused: {query}", flush=True)
             continue
         if result.truncated:
             # Excluded, not counted. A cut-off answer is missing citations it
             # would have made, and scoring it would measure max_tokens rather
             # than the model.
             truncated += 1
-            print(f"[{i}/{len(queries)}] TRUNCATED, excluded: {query}")
+            print(f"[{i}/{len(queries)}] TRUNCATED, excluded: {query}", flush=True)
             continue
 
         claims = split_claims(result.text)
@@ -105,7 +160,8 @@ def main() -> None:
 
         bad = sum(1 for c in checks if c.verdict not in (SUPPORTED, UNCLEAR))
         print(f"[{i}/{len(queries)}] {len(claims):>2} claims, "
-              f"{len(checks):>2} citations, {bad} not supported  {query}")
+              f"{len(checks):>2} citations, {bad} not supported  {query}",
+              flush=True)
 
         if args.show:
             for claim in claims:
