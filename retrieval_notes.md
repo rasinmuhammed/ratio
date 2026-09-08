@@ -519,7 +519,183 @@ test a hypothesis already answered in this direction is not a good bet.
 
 ---
 
-## Appendix: four measurement mistakes worth recording
+## 10. Citation compliance: from asking nicely to a structural guarantee
+
+`openai/gpt-oss-120b` skips citations outright on roughly one answer in
+three, non-deterministically, at temperature 0. `CITE_REMINDER`, repeated at
+the end of the prompt rather than only in the system message, helped: three
+trials with it, zero total failures against one with the plain version.
+Suggestive, not conclusive, and still a request, not a guarantee.
+
+Mercury 2 was tried as an alternative model rather than a better prompt.
+First result looked like the opposite failure: zero uncited claims across 8
+queries, but only 66.7% citation precision, over-committing to citations it
+had not verified rather than skipping them. A `PRECISION_REMINDER`
+("a wrong citation costs more than a missing one, cite the single strongest
+source rather than every one that seems related") moved that number, 66.7%
+to 75.0% on the same 8 queries. Neither number turned out to be trustworthy:
+a live API call surfaced a response `warning` field this code had never
+read, `temperature 0.0 is not within [0.5, 1]. Temperature has been set to
+0.75`. Every Mercury run up to that point had been sampling at 0.75, not the
+pinned 0.0 the Groq runs used, an unannounced confound behind every
+run-to-run swing measured before it was found. Fixed by sending 0.5,
+Mercury's floor, and logging the `warning` field going forward instead of
+discarding it.
+
+**The actual fix was not a better prompt.** `CITE_REMINDER` and
+`PRECISION_REMINDER` are both requests a fluency-optimised model can comply
+with partially, which is what "10-25% wrong or missing regardless of
+wording" means: partial compliance is the ceiling of asking. Mercury 2
+supports JSON-schema-constrained output (`response_format:
+{"type": "json_schema", ...}`), so `GROUNDED_ANSWER_SCHEMA` requires every
+claim object to carry a `source_ids` array, `minItems: 1`. This does not
+make a citation correct, that is still what citation precision measures, it
+makes an uncited claim structurally impossible to emit rather than merely
+discouraged.
+
+```
+full 15-query set              precision   support   uncited
+Groq gpt-oss-120b                 85.0%     88.7%      10.2%
+Mercury 2 baseline (temp bug)      86.3%     91.4%       1.4%
+Mercury 2 + precision reminder     82.7%     84.6%       1.9%
+Mercury 2 + structured output      91.2%     96.9%       0.0%
+```
+
+Structured output measured best on every axis, and 0.0% uncited is not a
+sampled result, it is the schema doing what it was built to do. One
+adjacent bug found live, worth recording on its own: the first structured
+run reported 96.8%/100.0%, better still, because 3 of 15 queries came back
+`refused: false` with an empty `claims` array, a third outcome state free
+text cannot produce (`split_claims` always returns at least one claim from
+non-empty text) and the schema never explicitly ruled out. Those 3 silently
+left the denominator instead of counting as the non-answers they were.
+Fixed at the code level, not the schema, JSON Schema's `strict` mode here
+does not reliably support "claims non-empty when refused is false" as a
+cross-field constraint, so `answer_structured` now collapses that state into
+an explicit refusal itself. The honest number after the fix is above:
+91.2%/96.9%, with the refusal count corrected from 3 of 15 to 6 of 15.
+
+**What this does not change:** roughly 40% of these conceptual queries get
+no answer at all, refused or silently empty, both before and after the fix.
+That is a stable, real property of running this system on this query set,
+not something the schema fix touched, and it is worth remembering next to
+the precision number rather than instead of it, structured output makes the
+model more honest, not more willing to answer.
+
+## 11. Conceptual query labels, built by reversing the direction
+
+Every number in this document up to here is exact-match: `build_labels.py`
+finds every chunk containing a literal string like `"AIR 1974"` and calls
+that the correct answer set, free, mechanical, no judgment required.
+Conceptual relevance has no equivalent free lunch, "does this passage answer
+this question" needs a legal reader, which is exactly why this gap outlived
+every other measurement effort in this project.
+
+The way out: generate the question from the answer instead of judging an
+answer against a question written separately. Sample a chunk `stance.py`
+already classifies as `HOLDING` or `BOTH` (1,083 of 6,476 chunks in the
+sample index), ask Mercury 2 to write one conceptual question that chunk
+answers, in the way a person actually asks it, no party names, no case
+numbers, no distinctive phrases quoted from the source. The chunk is then
+relevant to that question *by construction*, no judgment call needed, the
+question was built to fit it. A crude n-gram overlap check rejects and
+retries any generated question that shares a long run of words with the
+source, catching the model copying rather than generalising.
+
+25 labels, roughly 2 seconds each. A real bug surfaced building them: the
+script's candidate order is shuffled with a fixed seed for reproducibility,
+which means two separate invocations reshuffle identically, and a chunk
+already labelled gets sampled again. Mercury rarely repeats a question
+verbatim at temperature 0.5, so it reworded rather than duplicated,
+"public body" versus "public authority" for the same chunk, past a dedup
+check that only compared exact question text. Two of the first batch of 25
+were exactly this. Fixed by tracking already-labelled *chunk ids*, not just
+question strings, across runs.
+
+**The honest limitation, worth keeping next to any number built on these
+labels:** the label says this chunk answers this question, not that it is
+the only chunk in 414,122 that does. Some other judgment plausibly states
+the same principle. A retriever surfacing a different, equally correct
+holding scores as a miss here. Recall on these labels is a lower bound on
+real recall, not a ceiling.
+
+## 12. HyDE: a real negative result
+
+The theory: a question and its answer are written in different registers,
+"grounds for anticipatory bail" versus "having regard to the nature and
+gravity of the accusation... this Court is inclined to grant anticipatory
+bail under Section 438", same meaning, different surface form, and
+embeddings are sensitive to that gap. HyDE closes it by never embedding the
+raw query, an LLM first writes a fabricated passage, in the corpus's
+register, that would answer the question, and that passage gets embedded
+and searched with instead. The fabrication's facts do not need to be true,
+only its register needs to match, that register match is what closes the
+gap, not the invented specifics.
+
+First real test against the 25 conceptual labels above, `dense` versus
+`hyde`, everything else held fixed:
+
+```
+conceptual (n=25)      recall   precision    MRR
+dense (raw query)       0.440       0.088   0.263
+hyde                    0.360       0.072   0.198
+bm25                    0.720       0.144   0.561
+reranked                0.800       0.160   0.597
+```
+
+**HyDE underperformed plain dense retrieval on exactly the query type it
+was built for.** Not neutral, worse, on every metric. On exact-match queries
+it was also near-useless (0.008 recall), which was predicted and is not the
+finding, the conceptual result is.
+
+Plausible mechanism, not tested directly: Mercury 2 is not specialised on
+Indian judgment writing, and its hallucinated case names, section numbers
+and procedural detail likely do not land in this corpus's specific register
+closely enough, adding confident, wrong specificity that matches nothing
+real rather than closing the phrasing gap. n=25 is small enough that this
+deserves the same caveat every small sample in this document gets: a few
+queries flipping could move these numbers meaningfully.
+
+**What this closes:** treated the same as voyage-law-2 in section 9, tested
+rather than assumed, closed as a real negative result, no further spend
+planned. Reranking remains the clear, unambiguous win on this same table,
+0.800 recall against dense's 0.440, now confirmed on genuinely conceptual
+queries rather than assumed to generalise from the exact-match benchmark.
+
+## 13. A third provider, and what "tested" means under real network conditions
+
+TokenRouter's free `z-ai/glm-5.3-free` was added as a third `LLM` alongside
+Groq and Mercury, same protocol, same retry shape, no changes needed
+anywhere it plugs in. What it surfaced was not about GLM's answer quality so
+much as about what "the model works" actually requires checking.
+
+A trivial prompt ("say hi") returned in 0.6 seconds. A real prompt, actual
+retrieved sources, took 185 seconds and needed a retry past a 60-second
+attempt to get there, later confirmed the free tier truncates at 2000
+output tokens on 6 of 6 real answers in a row, the identical
+reasoning-eats-the-budget pattern already found and fixed for `gpt-oss` and
+Mercury, fixed the same way, budget raised, this time straight to 8000
+rather than rediscovering the ceiling twice. Two full audit attempts each
+died partway through, once on a bare `503`, once on a `ReadTimeout` that
+survived four retries at 200 seconds each, over 13 minutes on one query. The
+`503` was a real gap in this project's own retry logic, not GLM's fault:
+every provider here retried 429 and connection-level errors, nothing else,
+so a transient server error that exists specifically to mean "try again"
+was never given the chance. Fixed once, uniformly, across all three
+providers (`RETRYABLE_STATUS = {429, 500, 502, 503, 504}`), not patched for
+TokenRouter alone.
+
+**What remains unresolved, honestly:** GLM's full 15-query citation
+benchmark never completed. Partial results across two attempts, 10 of 15
+queries actually answered, showed a materially higher refusal rate (4-5 of
+9-10, versus roughly 3 of 15 for Groq and Mercury) and citation quality in
+the same range as the other two where it did answer. That is a real
+observation, not a verified number, and it stays unclosed rather than
+reported as a finding it is not yet entitled to be.
+
+---
+
+## Appendix: six measurement mistakes worth recording
 
 **The model limit was not what the documentation implied.** `max_seq_length` on the loaded model read 256, not the 512 assumed when chunk size was chosen, and the corpus tokenises at 4.18 characters per token rather than the estimated 3.5. **34% of chunks were being silently truncated** before the model saw them, with no error and no warning. Fixed by measuring chunk size with the model's own tokenizer and switching to a model with a real 512 token context.
 
@@ -563,3 +739,27 @@ answer reproduced the example phrasing from the system prompt almost verbatim.
 Had that gone unread, "the labels work" would have been reported off a run
 where nothing was being compared. The system prompt now moves with the flag,
 and only then did a difference appear.
+
+**A retry fix multiplied instead of adding, and the result looked like a
+silent hang rather than a bug.** `attribute._ask` already retried a failing
+judge call up to 4 times. Adding transport-error retry to `GroqLLM.complete`
+itself, 6 attempts, up to 90 seconds each, was correct in isolation and
+wrong composed with the caller already wrapping it: one persistently unlucky
+claim could burn 4 x 6 attempts before either layer gave up, tens of minutes
+that looked, from the outside, indistinguishable from a hung process. A run
+went quiet for two hours before this was found, not by reasoning about the
+retry counts but by `ps` and `lsof` on the live process: alive, minimal CPU,
+no established connection, consistent with sleeping between retries rather
+than stuck. Fixed by shrinking both layers together, `_ask` to 3 attempts,
+`complete` to 4 with a 30-second cap, chosen to still satisfy the existing
+test that guarantees survival of 2 consecutive failures, not chosen to hit a
+round number.
+
+**429 was the only status this project ever retried, until a bare 503 ended
+a run that had already produced 7 good results.** Every provider's retry
+loop special-cased exactly one HTTP status. A transient server error, the
+exact condition a retry loop exists to absorb, propagated as an uncaught
+exception instead, discarding real progress on query 8 of 15. Fixed once,
+as a shared constant (`RETRYABLE_STATUS = {429, 500, 502, 503, 504}`) rather
+than patched into the one provider that happened to trigger it first, since
+nothing about the gap was provider-specific.
