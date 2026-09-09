@@ -34,6 +34,25 @@ class FakeSemantic:
         ]
 
 
+class FakeHybridSemantic:
+    """Like FakeSemantic, but accepts depth the way HybridRetriever does, so
+    the depth-passthrough fix can be tested directly rather than only
+    exercising the except-TypeError fallback FakeSemantic above forces."""
+
+    def __init__(self, order):
+        self.order = order
+        self.last_depth = None
+
+    def search(self, query, k=5, depth=20):
+        self.last_depth = depth
+        return [
+            Result(rank=i, score=0.5, chunk_id=CHUNKS[j]["id"],
+                   doc_id=CHUNKS[j]["doc_id"], text=CHUNKS[j]["text"],
+                   metadata={}, score_type="cosine")
+            for i, j in enumerate(self.order[:k], start=1)
+        ]
+
+
 def test_normalise_collapses_whitespace_inside_identifiers():
     """'No.1091 of 2013' and 'No. 1091  of 2013' are the same reference
     written by two different clerks."""
@@ -123,3 +142,24 @@ def test_router_honours_k_smaller_than_the_exact_hit_count():
     results = router.search("AIR 1974", k=1)
     assert [r.chunk_id for r in results] == ["c0"]
     assert semantic.calls == 0
+
+
+def test_router_requests_depth_explicitly_when_the_backend_supports_it():
+    """RerankedRetriever had this exact bug: passing k alone to a
+    HybridRetriever-shaped backend leaves the pool capped by its own
+    CANDIDATE_DEPTH default, silently shallower than what k asked for.
+    Backfill must request depth=candidate_n explicitly, not rely on k."""
+    semantic = FakeHybridSemantic([3, 4, 1, 2])
+    router = RoutedRetriever(semantic, CHUNKS)
+    router.search("principles governing an injunction", k=3)
+    # No exact hits for this query, so candidate_n == k + 0 == 3.
+    assert semantic.last_depth == 3
+
+
+def test_router_falls_back_when_the_backend_does_not_accept_depth():
+    """Plain Retriever and KeywordRetriever take no depth argument at all;
+    the TypeError fallback must still return results, not raise."""
+    semantic = FakeSemantic([3, 2])
+    router = RoutedRetriever(semantic, CHUNKS)
+    results = router.search("principles governing an injunction", k=2)
+    assert [r.chunk_id for r in results] == ["c3", "c2"]

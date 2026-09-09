@@ -156,8 +156,23 @@ class RoutedRetriever:
         # three slots, and topically similar text is a better use of them than
         # nothing. Semantic results that duplicate an exact hit are dropped,
         # otherwise the same chunk appears twice with two different scores.
+        candidate_n = k + len(results)
+        try:
+            # Same bug RerankedRetriever had: HybridRetriever's own fusion
+            # pool is capped by its own CANDIDATE_DEPTH (default 20)
+            # regardless of what k asks for. Passing k alone silently caps
+            # the pool below what was actually requested; depth has to be
+            # asked for explicitly. Latent here until conceptual queries
+            # started running through this path in volume, same as the
+            # RerankedRetriever version of this bug was latent until it was
+            # measured directly.
+            candidates = self.semantic.search(query, k=candidate_n, depth=candidate_n)
+        except TypeError:
+            # Plain Retriever and KeywordRetriever take no depth argument.
+            candidates = self.semantic.search(query, k=candidate_n)
+
         seen = {r.chunk_id for r in results}
-        for candidate in self.semantic.search(query, k=k + len(results)):
+        for candidate in candidates:
             if candidate.chunk_id in seen:
                 continue
             results.append(Result(

@@ -446,20 +446,27 @@ In the deployed pipeline (`ask.py`), identifier queries never reach the
 reranker at all, so this table measures reranker mechanics on a query type
 the real system would route away from reranking entirely.
 
-### The same bug, still latent elsewhere
+### The same bug, found again and fixed for real this time
 
-`RoutedRetriever` composes with `hybrid` the same way `RerankedRetriever`
-does: `self.semantic.search(query, k=...)`, no `depth`. In `ask.py` this is
-harmless, because the wiring is `RoutedRetriever(RerankedRetriever(hybrid,
+`RoutedRetriever` composed with `hybrid` the same way `RerankedRetriever`
+used to: `self.semantic.search(query, k=...)`, no `depth`. In `ask.py` this
+was harmless, because the wiring is `RoutedRetriever(RerankedRetriever(hybrid,
 reranker), payloads)` and `RerankedRetriever` already forces `depth=50` on
 `hybrid` internally regardless of what `k` `RoutedRetriever` passes down. But
 `evaluate.py`'s standalone `"routed"` config wraps `hybrid` directly with no
-reranker in between, so its semantic backfill still defaults to `depth=20`.
-Invisible today because `routed` scores 1.000/1.000 on this benchmark and
-exact lookup does all the work. It stops being invisible the moment backfill
-quality is the whole answer, which is precisely the conceptual-query case
-that remains unmeasured. Not fixed, because nothing exercises it yet, but
-worth knowing before it produces a confusing number later.
+reranker in between, so its semantic backfill defaulted to `depth=20`
+regardless of what was actually asked for.
+
+This was invisible on the exact-match benchmark, `routed` scores close to
+1.000/1.000 there and exact lookup does all the work, backfill barely
+matters. It stopped being invisible the moment conceptual queries entered the
+picture, exactly the case predicted here before it was measured: backfill
+quality *is* the whole answer once there is no exact hit to lean on. Fixed
+the same way `RerankedRetriever` was, `search()` now requests
+`depth=candidate_n` explicitly with a `TypeError` fallback for retrievers
+that do not accept it, and locked in with a test that actually asserts the
+depth value passed through rather than only checking the fallback path did
+not raise.
 
 ---
 
