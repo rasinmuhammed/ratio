@@ -1,5 +1,7 @@
 # Ratio
 
+> **Work in Progress.** The core retrieval and generation pipeline is functional, but active development is ongoing — the full index build, frontend polish, and evaluation benchmarks are still being completed.
+
 Ratio is a Retrieval-Augmented Generation (RAG) engine built specifically for Indian legal jurisprudence. 
 
 The name "Ratio" stems from ***Ratio Decidendi***—the rationale for the decision. In common law, the *ratio decidendi* is the binding legal principle upon which a court's decision is founded. The core philosophy of this engine is exactly that: to separate the binding legal holding from mere facts, procedural history, or the arguments submitted by counsel.
