@@ -25,11 +25,40 @@ topical similarity is a soft one.
 
 from __future__ import annotations
 
+import math
 import re
 from array import array
 from typing import Any
 
 from rag.retrieve import DEFAULT_K, Result
+
+COURT_WEIGHT = {
+    "supreme_court": 1.00,
+    "high_court_db": 0.85,
+    "high_court_sb": 0.75,
+    "tribunal":      0.60,
+}
+
+def authority_boost(result: Result) -> float:
+    """Calculates a score multiplier based on court hierarchy and citation count."""
+    court_type = result.metadata.get("court", "").lower()
+    # Handle missing cited_by gracefully (default 1)
+    cited_by = result.metadata.get("cited_by", 1)
+    if not isinstance(cited_by, (int, float)):
+        try:
+            cited_by = int(cited_by)
+        except (ValueError, TypeError):
+            cited_by = 1
+            
+    # Default to 0.70 for unknown courts
+    base = 0.70
+    for key, weight in COURT_WEIGHT.items():
+        if key in court_type.replace(" ", "_"):
+            base = weight
+            break
+            
+    cite_boost = min(math.log1p(max(0, cited_by)) / math.log1p(1000), 0.3)
+    return base + cite_boost
 
 # The same patterns that build_labels.py greps for. That is deliberate: the
 # label set defines a relevant chunk as one containing the literal string, so
@@ -171,8 +200,25 @@ class RoutedRetriever:
             # Plain Retriever and KeywordRetriever take no depth argument.
             candidates = self.semantic.search(query, k=candidate_n)
 
+        # Apply authority-weighted ranking
+        boosted_candidates = []
+        for c in candidates:
+            boost = authority_boost(c)
+            boosted = Result(
+                rank=0, # Recalculated below
+                score=c.score * boost,
+                chunk_id=c.chunk_id,
+                doc_id=c.doc_id,
+                text=c.text,
+                metadata=c.metadata,
+                score_type=c.score_type,
+            )
+            boosted_candidates.append(boosted)
+            
+        boosted_candidates.sort(key=lambda x: x.score, reverse=True)
+
         seen = {r.chunk_id for r in results}
-        for candidate in candidates:
+        for candidate in boosted_candidates:
             if candidate.chunk_id in seen:
                 continue
             results.append(Result(

@@ -48,11 +48,34 @@ def main() -> None:
     model = load_model()
     length = token_length(model)
 
+    import sqlite3
+    
     docs = load_documents()
     if args.limit:
         docs = itertools.islice(docs, args.limit)
 
-    chunks = (c for d in docs for c in chunk_document(d, length=length))
+    # Optional: Load Summary-Augmented Chunking (SAC) summaries if they exist
+    summaries_db = Path("data/summaries.db")
+    doc_summaries = {}
+    if summaries_db.exists():
+        log.info("Loading SAC summaries from %s", summaries_db)
+        try:
+            conn = sqlite3.connect(summaries_db)
+            cursor = conn.cursor()
+            cursor.execute("SELECT doc_id, text FROM summary")
+            doc_summaries = {row[0]: row[1] for row in cursor.fetchall()}
+            conn.close()
+            log.info("Loaded %d SAC summaries", len(doc_summaries))
+        except Exception as e:
+            log.warning("Failed to load SAC summaries: %s", e)
+            
+    def attach_and_chunk(doc):
+        if doc.id in doc_summaries:
+            # We must not mutate the frozen dataclass directly, but metadata is a dict
+            doc.metadata["doc_summary"] = doc_summaries[doc.id]
+        return chunk_document(doc, length=length)
+
+    chunks = (c for d in docs for c in attach_and_chunk(d))
 
     log.info("building index -> %s", args.out)
     started = time.time()

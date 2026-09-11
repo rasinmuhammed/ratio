@@ -24,3 +24,10 @@ __pycache__/
 .idea/
 scratch/
 *.ipynb_checkpoints/
+
+# Personal notes and docs
+docs/
+*.md
+!README.md
+!frontend/README.md
+

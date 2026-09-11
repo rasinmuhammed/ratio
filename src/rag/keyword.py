@@ -16,8 +16,11 @@ K1 = 1.5
 # by relative length. 0.75 is the standard compromise.
 B = 0.75
 
-_TOKEN = re.compile(r"[a-z0-9]+")
-
+_LEGAL_ID = re.compile(
+    r"\b(AIR|SCC|SCR|WLR|ALR|ILR|CrLJ|SCALE|SCW|MLJ)\b"
+    r"|(?:No\.?\s?\d+(?:\s+of\s+\d{4})?)"
+)
+_LOWER_TOKEN = re.compile(r"[a-z0-9]+")
 
 class Match(NamedTuple):
     """A scored hit. Named rather than a bare tuple so callers write
@@ -27,13 +30,15 @@ class Match(NamedTuple):
     score: float
 
 def tokenize(text: str) -> list[str]:
-    """Lowercase, split on non-alphanumerics.
+    """Lowercase, split on non-alphanumerics, but preserve legal identifiers.
 
-    Digits are kept as tokens deliberately: '1974', '1091', '138' are exactly
-    the identifiers dense retrieval cannot handle, and they are the reason
+    Digits and legal reporters ('AIR', 'SCC') are kept intact because they are
+    exactly the identifiers dense retrieval cannot handle, and they are the reason
     this module exists.
     """
-    return _TOKEN.findall(text.lower())
+    ids = [m.group(0).replace(" ", "_") for m in _LEGAL_ID.finditer(text)]
+    lower = _LOWER_TOKEN.findall(text.lower())
+    return ids + lower
 
 class BM25Index:
     """An inverted index: term -> the chunks containing it, with counts.

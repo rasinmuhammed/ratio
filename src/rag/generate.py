@@ -55,6 +55,14 @@ MERCURY_MODEL = os.environ.get("MERCURY_MODEL", "mercury-2")
 TOKEN_ROUTER_URL = "https://api.tokenrouter.com/v1/chat/completions"
 TOKEN_ROUTER_MODEL = os.environ.get("TOKEN_ROUTER_MODEL", "z-ai/glm-5.3-free")
 
+# MBZUAI IFM K2-Horizon adapter.
+# Models from this provider generate internal reasoning inside <think>...</think>
+# blocks, which we strip before returning to keep the answer clean.
+IFM_URL = "https://api.ifm.ai/v1/chat/completions"
+IFM_MODEL = os.environ.get("IFM_MODEL", "IFM/K2-Horizon-375B-A23B")
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.S)
+
 # Measured in whatever unit the injected `length` function returns. Pass
 # token_length(model) and this means tokens; the default len() means
 # characters. The unit is the caller's choice, so it is never implicit.
@@ -650,6 +658,114 @@ class TokenRouterLLM:
         raise RuntimeError(f"TokenRouter gave status {response.status_code} after all retries: {response.text[:200]}")
 
 
+class IFMLLM:
+    def __init__(
+            self,
+            model: str = IFM_MODEL,
+            api_key: str | None = None,
+            timeout: float = 200.0,
+            max_tokens: int = MAX_ANSWER_TOKENS * 8,
+            retries: int = 4,
+            sleep=time.sleep,
+            ) -> None:
+        if api_key is None:
+            _load_env_file()
+        self.api_key = api_key or os.environ.get("IFM_API_KEY")
+        if not self.api_key:
+            raise ValueError("IFM_API_KEY is not set (env or .env file)")
+        self.model = model
+        self.timeout = timeout
+        self.max_tokens = max_tokens
+        self.retries = retries
+        self.sleep = sleep
+        self.last_finish_reason: str | None = None
+
+    def complete(self, system: str, user: str) -> str:
+        for attempt in range(self.retries):
+            try:
+                response = httpx.post(
+                    IFM_URL,
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json={
+                        "model": self.model,
+                        "messages": [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": user},
+                        ],
+                        "temperature": 0.6,
+                        "max_tokens": self.max_tokens,
+                    },
+                    timeout=httpx.Timeout(
+                        connect=10.0, read=self.timeout, write=10.0, pool=10.0,
+                    ),
+                )
+            except httpx.TransportError as exc:
+                if attempt == self.retries - 1:
+                    raise RuntimeError(
+                        f"IFM connection failed: {exc}") from exc
+                wait = 2 ** attempt * 5
+                logger.info("connection error (%s), retrying in %ds", exc, wait)
+                self.sleep(wait)
+                continue
+
+            if response.status_code not in RETRYABLE_STATUS:
+                response.raise_for_status()
+                choice = response.json()["choices"][0]
+                self.last_finish_reason = choice.get("finish_reason")
+                if self.last_finish_reason == "length":
+                    logger.warning(
+                        "answer truncated at max_tokens=%d, citations may be "
+                        "missing", self.max_tokens,
+                    )
+                content = choice["message"].get("content")
+                if content:
+                    content = _THINK_RE.sub("", content).strip()
+                return (content or "").strip()
+
+            if attempt == self.retries - 1:
+                break
+            wait = float(response.headers.get("retry-after", 0)) or 2 ** attempt * 5
+            logger.info("status %d, waiting %.0fs", response.status_code, wait)
+            self.sleep(min(wait + 1, 30))
+
+        raise RuntimeError(f"IFM gave status {response.status_code} after all retries: {response.text[:200]}")
+
+    def stream(self, system: str, user: str):
+        """Yields token deltas as they arrive from the server."""
+        import json
+        with httpx.stream(
+            "POST",
+            IFM_URL,
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json={
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "temperature": 0.6,
+                "max_tokens": self.max_tokens,
+                "stream": True,
+            },
+            timeout=httpx.Timeout(connect=10.0, read=self.timeout, write=10.0, pool=10.0),
+        ) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line or not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                    delta = chunk["choices"][0].get("delta", {})
+                    content = delta.get("content")
+                    if content:
+                        yield content
+                except (json.JSONDecodeError, KeyError, IndexError):
+                    continue
+
+
 # LLM_PROVIDER switches the whole system between providers with no code
 # changes at the call site, the same shape GROQ_MODEL already uses to survive
 # a model swap within Groq. This is what makes the Mercury-vs-gpt-oss
@@ -662,6 +778,8 @@ def get_llm() -> LLM:
         return MercuryLLM(reasoning_effort=os.environ.get("MERCURY_REASONING_EFFORT"))
     if provider == "tokenrouter":
         return TokenRouterLLM()
+    if provider == "ifm":
+        return IFMLLM()
     return GroqLLM()
 
 # ---------------------------------------------------------------------------

@@ -69,6 +69,8 @@ def show(result, args) -> None:
         print(f"model cited sources that do not exist: {result.invalid_citations}")
 
 
+from rag.corrective import corrective_answer
+
 def run(query: str, retriever, llm, args) -> None:
     route = classify(query)
     print(f"\n{RULE}\n{query}")
@@ -79,6 +81,19 @@ def run(query: str, retriever, llm, args) -> None:
     started = time.time()
     result = answer(query, retriever, llm, k=args.k,
                     stance_notes=not args.no_stance)
+                    
+    # Corrective RAG fallback
+    crag_used = False
+    if result.refused:
+        print("\nFirst pass refused. Activating Corrective RAG (CRAG)...")
+        crag_result = corrective_answer(query, retriever, llm, result, k=args.k)
+        if crag_result and not crag_result.refused:
+            result = crag_result
+            crag_used = True
+            
+    if crag_used:
+        print(f"\n[CRAG] Successfully generated an answer after query decomposition.")
+        
     show(result, args)
     print(f"{time.time() - started:.1f}s")
 

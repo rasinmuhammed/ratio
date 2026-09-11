@@ -47,7 +47,12 @@ def context_prefix(doc: Document) -> str:
     case_no = _case_number(doc.text)
     if case_no:
         parts.append(case_no)
-    return " | ".join( p for p in parts if p)
+    
+    header = " | ".join( p for p in parts if p)
+    summary = doc.metadata.get("doc_summary")
+    if summary:
+        return f"{header}\n\nSummary: {summary}"
+    return header
 
 def _split_numbered(text: str) -> list[str] | None:
     """Split on numbered paragraphs."""
