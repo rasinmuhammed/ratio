@@ -21,6 +21,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from rag.agent import LegalAgent
 from rag.audit import init_db, log_request, log_correction
+from rag.cache import SemanticCache
 from rag.corrective import corrective_answer
 from rag.generate import (
     CONTEXT_BUDGET, SYSTEM_PROMPT, answer, build_prompt, get_llm, parse_answer,
@@ -47,6 +48,7 @@ class State:
     """Application state loaded once at startup."""
     retriever: Any
     llm: Any
+    cache: SemanticCache
 
 state = State()
 
@@ -55,16 +57,20 @@ async def lifespan(app: FastAPI):
     """Load the index and models."""
     logger.info("Initializing SQLite audit log...")
     init_db()
-    
+
     logger.info("Loading index from %s...", INDEX_DIR)
     started = time.time()
     hybrid = HybridRetriever(INDEX_DIR)
     reranked = RerankedRetriever(hybrid, CrossEncoderReranker())
     state.retriever = RoutedRetriever(reranked, hybrid.dense.payloads)
     state.llm = get_llm()
+    # hybrid.dense already carries the loaded bge-small model and its
+    # normalisation settings, so the cache embeds queries the exact same
+    # way retrieval does rather than loading a second copy of the model.
+    state.cache = SemanticCache(hybrid.dense)
     logger.info(
-        "Ready in %.0fs (%d chunks)", 
-        time.time() - started, 
+        "Ready in %.0fs (%d chunks)",
+        time.time() - started,
         len(hybrid.dense.payloads)
     )
     yield
@@ -88,6 +94,18 @@ class CorrectionRequest(BaseModel):
     query: str
     original_answer: str
     corrected_answer: str
+
+@app.get("/cache_stats")
+async def cache_stats() -> dict:
+    """Real hit/miss counts, not a claim. Existed nowhere before this: a
+    cache with no visible hit rate is indistinguishable from a cache that
+    never fires at all."""
+    return {
+        "entries": len(state.cache),
+        "hits": state.cache.stats.hits,
+        "misses": state.cache.stats.misses,
+        "hit_rate": state.cache.stats.hit_rate,
+    }
 
 @app.post("/submit_correction")
 async def submit_correction(req: CorrectionRequest):
@@ -116,9 +134,19 @@ class AnswerResponse(BaseModel):
 @app.post("/query", response_model=AnswerResponse)
 async def query_endpoint(req: QueryRequest):
     """Synchronous generation. Waits for the full K2-Horizon response."""
+    # Keyed on query text alone, not (query, k, stance_notes): a cache hit
+    # answers slightly loosely rather than never, which matches what this
+    # cache is for (cutting repeat-question latency), not a strict
+    # per-parameter memoizer. Two requests for the same question with
+    # different k could share a cached answer generated at a different k;
+    # documented here rather than silently assumed correct.
+    cached = state.cache.get(req.query)
+    if cached is not None:
+        return cached
+
     start_time = time.time()
     route = classify(req.query)
-    
+
     t0 = time.time()
     # 1. First Pass Retrieval & Generation
     result = answer(
@@ -170,7 +198,7 @@ async def query_endpoint(req: QueryRequest):
         llm_model=getattr(state.llm, "model", "unknown")
     )
     
-    return AnswerResponse(
+    response = AnswerResponse(
         query=req.query,
         text=result.text,
         refused=result.refused,
@@ -178,6 +206,8 @@ async def query_endpoint(req: QueryRequest):
         cited_source_indices=result.cited,
         crag_used=crag_used
     )
+    state.cache.put(req.query, response)
+    return response
 
 @app.get("/stream")
 async def stream_endpoint(request: Request, query: str, k: int = 6, stance_notes: bool = True):
@@ -262,13 +292,40 @@ async def stream_endpoint(request: Request, query: str, k: int = 6, stance_notes
 async def agent_stream_endpoint(request: Request, query: str, k: int = 6):
     """SSE streaming endpoint for the Autonomous LegalAgent."""
     async def event_generator():
+        # A cache hit skips the agent loop entirely: no retrieval, no
+        # LLM call, an SSE sequence shaped exactly like a real answer's so
+        # the frontend needs no special case for it. SemanticCache routes
+        # identifier queries to exact-string matching and conceptual
+        # queries to embedding similarity above a conservative threshold,
+        # specifically so a citation query is never served another
+        # citation's cached answer just because the two embed similarly.
+        cached = state.cache.get(query)
+        if cached is not None:
+            yield {
+                "event": "status",
+                "data": json.dumps({"message": "Served from cache."})
+            }
+            yield {
+                "event": "delta",
+                "data": json.dumps({"token": cached["answer"]})
+            }
+            yield {
+                "event": "sources",
+                "data": json.dumps({
+                    "sources": cached["sources"],
+                    "refused": cached["refused"],
+                    "invalid_citations": cached["invalid_citations"],
+                })
+            }
+            return
+
         agent = LegalAgent(state.llm, state.retriever, k=k)
-        
+
         yield {
             "event": "status",
             "data": json.dumps({"message": "Agent initialized. Analyzing query..."})
         }
-        
+
         final_answer = ""
         for event in agent.stream(query):
             if await request.is_disconnected():
@@ -324,6 +381,19 @@ async def agent_stream_endpoint(request: Request, query: str, k: int = 6):
                 "cited": i in cited,
             })
 
+        # Only a real answer is cached. final_answer stays "" when the
+        # agent hit the turn limit or the client disconnected mid-loop
+        # (the "error" branch above never sets it), and caching an empty
+        # or partial result would mean the next matching query gets
+        # served that failure instead of a fresh attempt.
+        if final_answer:
+            state.cache.put(query, {
+                "answer": final_answer,
+                "sources": sources_meta,
+                "refused": refused,
+                "invalid_citations": invalid_citations,
+            })
+
         yield {
             "event": "sources",
             "data": json.dumps({
@@ -332,5 +402,5 @@ async def agent_stream_endpoint(request: Request, query: str, k: int = 6):
                 "invalid_citations": invalid_citations,
             })
         }
-        
+
     return EventSourceResponse(event_generator())
