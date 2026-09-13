@@ -2,16 +2,32 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from pathlib import Path
 
 DB_PATH = Path("data/audit.db")
 
+
+def _connect() -> sqlite3.Connection:
+    """Every function below used to call sqlite3.connect(DB_PATH) directly,
+    which only worked because data/ already existed on whatever machine
+    happened to run this first. init_db() creates the directory, but
+    nothing enforced init_db() running before log_request, log_correction,
+    save_session or load_session, and a fresh checkout with no data/ at
+    all (a CI runner, a first-time clone) hit sqlite3.OperationalError:
+    unable to open database file the first time any of them ran without
+    init_db() having been called first. Centralising the connection here
+    means the directory exists regardless of call order.
+    """
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    return sqlite3.connect(DB_PATH)
+
+
 def init_db() -> None:
     """Create the audit table if it does not exist."""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS request_log (
                 id INTEGER PRIMARY KEY,
@@ -60,7 +76,7 @@ def log_request(
     llm_model: str,
 ) -> None:
     """Append a single request log to the database."""
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         conn.execute("""
             INSERT INTO request_log (
                 ts, query, route, refused, n_sources, n_cited,
@@ -84,11 +100,9 @@ def log_request(
             llm_model
         ))
 
-import json
-
 def save_session(session_id: str, messages: list[dict]) -> None:
     """Save an agent conversation session to the database."""
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         conn.execute("""
             INSERT INTO agent_sessions (session_id, messages, updated_at)
             VALUES (?, ?, ?)
@@ -103,7 +117,7 @@ def save_session(session_id: str, messages: list[dict]) -> None:
 
 def load_session(session_id: str) -> list[dict] | None:
     """Load an agent conversation session from the database."""
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         cursor = conn.execute(
             "SELECT messages FROM agent_sessions WHERE session_id = ?",
             (session_id,)
@@ -115,7 +129,7 @@ def load_session(session_id: str) -> list[dict] | None:
 
 def log_correction(query: str, original_answer: str, corrected_answer: str) -> None:
     """Save human-in-the-loop feedback for Direct Preference Optimization (DPO)."""
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         conn.execute("""
             INSERT INTO dpo_feedback (query, original_answer, corrected_answer, ts)
             VALUES (?, ?, ?, ?)
