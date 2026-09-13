@@ -1,7 +1,8 @@
 "use client";
 
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -39,7 +40,7 @@ const NODES: DiagNode[] = [
   {
     id: "router", label: "Query Router", sub: "01 · Deterministic", col: 1, rowOffset: 0,
     accent: "#E5C158", glow: "rgba(229,193,88,0.14)",
-    detail: { title: "Deterministic Query Router", tech: "Regex + Rule Engine", desc: "Inspects every query before retrieval fires. Regex patterns detect statutory citations (AIR, SCC) and dispatch them to exact-match BM25. Everything else routes to vector search.", why: "Dense embeddings collapse 'AIR' into 'air', destroying citation precision. Hard routing guarantees zero citation loss." },
+    detail: { title: "Deterministic Query Router", tech: "Regex + Rule Engine", desc: "Inspects every query before retrieval fires. Regex patterns detect statutory citations (AIR, SCC) and dispatch them to exact-match BM25. Everything else routes to vector search.", why: "Dense embeddings collapse 'AIR' into 'air', destroying citation precision. Measured, not assumed: 0.925 recall and 1.000 MRR on exact-citation queries, versus 0.574 for BM25 alone - real and large, not a claim of zero loss." },
   },
   {
     id: "bm25", label: "BM25 Search", sub: "Case-sensitive tokeniser", col: 2, rowOffset: -1,
@@ -54,7 +55,7 @@ const NODES: DiagNode[] = [
   {
     id: "rrf", label: "RRF Merge", sub: "02 · Reciprocal Rank Fusion", col: 3, rowOffset: 0,
     accent: "#5882C7", glow: "rgba(88,130,199,0.12)",
-    detail: { title: "Reciprocal Rank Fusion", tech: "RRF with k=60", desc: "Candidate lists from BM25 and dense search are merged using RRF: each document gets score 1/(k + rank) from each list, then scores are summed.", why: "Neither sparse nor dense retrieval alone achieves 90%+ recall on Indian legal text. RRF consistently outperforms both in isolation." },
+    detail: { title: "Reciprocal Rank Fusion", tech: "RRF with k=60", desc: "Candidate lists from BM25 and dense search are merged using RRF: each document gets score 1/(k + rank) from each list, then scores are summed.", why: "Measured, not assumed: on exact-citation queries, RRF fusion actually scores below BM25 alone (0.565 vs 0.574 recall in the 313-label benchmark), because averaging two systems that are both wrong about identifiers is still wrong. That negative result is why identifier queries bypass RRF entirely and go to the exact-match router below - fusion earns its place on conceptual queries, not by assumption on every query." },
   },
   {
     id: "authority", label: "Authority Weighting", sub: "03 · Court Hierarchy", col: 4, rowOffset: 0,
@@ -77,9 +78,9 @@ const NODES: DiagNode[] = [
     detail: { title: "Context Assembly", tech: "Prompt engineering + JSON schema", desc: "Top-k passages are assembled into a structured prompt. Each includes: verbatim text, source case name, court tier, year, passage ID, and stance label.", why: "Unstructured context leads to citation hallucination. A strict passage-ID schema forces the model to ground every claim in a retrievable source." },
   },
   {
-    id: "llm", label: "LLM Generation", sub: "K2-Horizon-375B", col: 8, rowOffset: 0,
+    id: "llm", label: "LLM Generation", sub: "K2-Horizon-375B-A23B", col: 8, rowOffset: 0,
     accent: "#8B61C7", glow: "rgba(139,97,199,0.14)",
-    detail: { title: "LLM Synthesis Layer", tech: "K2-Horizon-375B", desc: "Generates a structured legal answer: holding summary, applicable legal test, and enumerated citations referencing passage IDs.", why: "A 375B-parameter model has sufficient capacity for complex multi-hop Indian legal reasoning within the packed context window." },
+    detail: { title: "LLM Synthesis Layer", tech: "K2-Horizon-375B-A23B (MoE)", desc: "Generates a structured legal answer: holding summary, applicable legal test, and enumerated citations referencing passage IDs.", why: "A sparse mixture-of-experts model: 375B total parameters, roughly 23B active per token. Named for what it costs to run, not inflated as a dense 375B claim - the active-parameter count is the honest number for latency and compute." },
   },
   {
     id: "answer", label: "Cited Answer", sub: "Verified + attributable", col: 9, rowOffset: 0,
@@ -107,22 +108,23 @@ const EDGES: Edge[] = [
 // Layout Math
 // ─────────────────────────────────────────────────────────────────────────────
 
-const COL_W = 280;
-const NODE_W = 200;
-const NODE_H = 68;
-const PAD_X = 60;
+const COL_W = 260;
+const NODE_W = 210;
+const NODE_H = 76;
+const PAD_X = 48;
 const CANVAS_W = NODES.length * COL_W + PAD_X * 2;
-const CANVAS_H = 360;
+const CANVAS_H = 320;
 const MID_Y = CANVAS_H / 2;
 
 function getNodePos(node: DiagNode) {
   return {
     x: PAD_X + node.col * COL_W,
-    y: MID_Y - (NODE_H / 2) + (node.rowOffset * 90),
+    y: MID_Y - (NODE_H / 2) + (node.rowOffset * 84),
   };
 }
 
 const nodeMap = Object.fromEntries(NODES.map((n) => [n.id, n]));
+const nodeOrder = NODES.map((n) => n.id);
 
 function buildPath(from: DiagNode, to: DiagNode): string {
   const fPos = getNodePos(from);
@@ -134,7 +136,7 @@ function buildPath(from: DiagNode, to: DiagNode): string {
 
   // Feedback loop (CRAG to Router)
   if (from.id === "crag" && to.id === "router") {
-    const bottomY = CANVAS_H - 20;
+    const bottomY = CANVAS_H - 16;
     return `M ${fx - NODE_W/2} ${fPos.y + NODE_H} C ${fx - NODE_W/2} ${bottomY}, ${tx + NODE_W/2} ${bottomY}, ${tx + NODE_W/2} ${tPos.y + NODE_H}`;
   }
 
@@ -156,148 +158,287 @@ export function RagArchitectureDiagram() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [activeId, setActiveId] = useState<string>("router");
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(true);
 
-  // Auto-scroll slightly on mount to show it's horizontal
-  useEffect(() => {
-    if (scrollRef.current) {
-      setTimeout(() => {
-        scrollRef.current?.scrollBy({ left: 100, behavior: "smooth" });
-      }, 500);
-    }
+  // Drag-to-pan state. Refs, not state, because these update on every
+  // mousemove and a state update per pixel would re-render the whole
+  // diagram every frame of a drag.
+  const dragState = useRef<{ dragging: boolean; startX: number; startScroll: number; moved: boolean }>({
+    dragging: false, startX: 0, startScroll: 0, moved: false,
+  });
+  const [isDragging, setIsDragging] = useState(false);
+
+  const updateEdgeFades = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 4);
+    setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 4);
   }, []);
+
+  useEffect(() => {
+    updateEdgeFades();
+    const el = scrollRef.current;
+    if (!el) return;
+    el.addEventListener("scroll", updateEdgeFades, { passive: true });
+    window.addEventListener("resize", updateEdgeFades);
+    return () => {
+      el.removeEventListener("scroll", updateEdgeFades);
+      window.removeEventListener("resize", updateEdgeFades);
+    };
+  }, [updateEdgeFades]);
+
+  // Centres the given node in the visible scroll area and selects it.
+  // Used by the arrow buttons, the progress dots and keyboard navigation,
+  // so every way of moving through the pipeline lands in the same place.
+  const goToId = useCallback((id: string) => {
+    setActiveId(id);
+    const el = scrollRef.current;
+    const node = nodeMap[id];
+    if (!el || !node) return;
+    const pos = getNodePos(node);
+    const target = pos.x + NODE_W / 2 - el.clientWidth / 2;
+    el.scrollTo({ left: Math.max(0, target), behavior: "smooth" });
+  }, []);
+
+  const step = useCallback((dir: 1 | -1) => {
+    const idx = nodeOrder.indexOf(activeId);
+    const next = nodeOrder[Math.min(Math.max(idx + dir, 0), nodeOrder.length - 1)];
+    goToId(next);
+  }, [activeId, goToId]);
+
+  const activeIndex = nodeOrder.indexOf(activeId);
 
   const activeNode = NODES.find((n) => n.id === activeId)!;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", background: "var(--color-void)" }}>
-      
-      {/* ─── TOP: HORIZONTAL SCROLLING PIPELINE ─── */}
-      <div 
-        ref={scrollRef}
-        style={{ 
-          flex: 1, 
-          width: "100%", 
-          overflowX: "auto", 
-          overflowY: "hidden", 
-          position: "relative",
-          cursor: "grab",
-          borderBottom: "1px solid var(--color-graphite-border)",
-          background: "linear-gradient(to bottom, var(--color-void) 0%, var(--color-graphite-deep) 100%)",
-        }}
-        // Enable drag to scroll natively or via wheel
-        onWheel={(e) => {
-          if (e.deltaY !== 0) {
-            scrollRef.current!.scrollLeft += e.deltaY;
-          }
-        }}
-      >
-        <div style={{ width: CANVAS_W, height: CANVAS_H, position: "relative" }}>
-          {/* SVG Edges */}
-          <svg style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
-            <defs>
-              <marker id="arr-def" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill="var(--color-graphite-border)" /></marker>
-              <marker id="arr-hot" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill="#E5C158" /></marker>
-              <marker id="arr-fb" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill="#C75858" /></marker>
-              <linearGradient id="glow-line" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stopColor="#E5C158" stopOpacity="0" />
-                <stop offset="50%" stopColor="#E5C158" stopOpacity="1" />
-                <stop offset="100%" stopColor="#E5C158" stopOpacity="0" />
-              </linearGradient>
-            </defs>
 
-            {EDGES.map((edge, i) => {
-              const fn = nodeMap[edge.from];
-              const tn = nodeMap[edge.to];
-              const d = buildPath(fn, tn);
-              const isActive = activeId === edge.from || activeId === edge.to || hoveredId === edge.from || hoveredId === edge.to;
-              const isFb = edge.feedback;
-              const color = isFb ? "#C75858" : isActive ? "#E5C158" : "var(--color-graphite-border)";
-              const mark = isFb ? "arr-fb" : isActive ? "arr-hot" : "arr-def";
+      {/* ─── TOP: PIPELINE STRIP ─── */}
+      <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
+        <div
+          ref={scrollRef}
+          tabIndex={0}
+          role="region"
+          aria-label="Retrieval pipeline diagram, use the arrow keys or the buttons to move between stages"
+          onKeyDown={(e) => {
+            if (e.key === "ArrowRight") { e.preventDefault(); step(1); }
+            if (e.key === "ArrowLeft") { e.preventDefault(); step(-1); }
+          }}
+          onMouseDown={(e) => {
+            dragState.current = { dragging: true, startX: e.clientX, startScroll: scrollRef.current!.scrollLeft, moved: false };
+            setIsDragging(true);
+          }}
+          onMouseMove={(e) => {
+            if (!dragState.current.dragging || !scrollRef.current) return;
+            const dx = e.clientX - dragState.current.startX;
+            if (Math.abs(dx) > 3) dragState.current.moved = true;
+            scrollRef.current.scrollLeft = dragState.current.startScroll - dx;
+          }}
+          onMouseUp={() => { dragState.current.dragging = false; setIsDragging(false); }}
+          onMouseLeave={() => { dragState.current.dragging = false; setIsDragging(false); }}
+          style={{
+            height: "100%",
+            width: "100%",
+            overflowX: "auto",
+            overflowY: "hidden",
+            position: "relative",
+            cursor: isDragging ? "grabbing" : "grab",
+            borderBottom: "1px solid var(--color-graphite-border)",
+            background: "linear-gradient(to bottom, var(--color-void) 0%, var(--color-graphite-deep) 100%)",
+            outline: "none",
+            userSelect: isDragging ? "none" : undefined,
+          }}
+          // No wheel-hijacking: a normal vertical scroll gesture over this
+          // element used to be converted into horizontal pipeline scroll,
+          // which meant scrolling the page with the cursor anywhere over
+          // the diagram silently stopped working. Horizontal navigation is
+          // now the buttons, the dots, drag, and native trackpad
+          // two-finger horizontal swipe (which overflow-x:auto already
+          // supports with no JS), none of which touch vertical scroll.
+        >
+          <div style={{ width: CANVAS_W, height: CANVAS_H, position: "relative" }}>
+            {/* SVG Edges */}
+            <svg style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
+              <defs>
+                <marker id="arr-def" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill="var(--color-graphite-border)" /></marker>
+                <marker id="arr-hot" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill="#E5C158" /></marker>
+                <marker id="arr-fb" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill="#C75858" /></marker>
+              </defs>
+
+              {EDGES.map((edge, i) => {
+                const fn = nodeMap[edge.from];
+                const tn = nodeMap[edge.to];
+                const d = buildPath(fn, tn);
+                const isActive = activeId === edge.from || activeId === edge.to || hoveredId === edge.from || hoveredId === edge.to;
+                const isFb = edge.feedback;
+                const color = isFb ? "#C75858" : isActive ? "#E5C158" : "var(--color-graphite-border)";
+                const mark = isFb ? "arr-fb" : isActive ? "arr-hot" : "arr-def";
+
+                return (
+                  <g key={i}>
+                    <path d={d} fill="none" stroke={color} strokeWidth={isActive ? 2 : 1} strokeDasharray={edge.dashed ? "4 4" : undefined} markerEnd={`url(#${mark})`} style={{ transition: "stroke 0.3s ease" }} />
+                    {isActive && !isFb && (
+                      <circle r={3} fill="#E5C158">
+                        <animateMotion dur="2s" repeatCount="indefinite" path={d} />
+                      </circle>
+                    )}
+                    {isActive && isFb && (
+                      <circle r={3} fill="#C75858">
+                        <animateMotion dur="2.5s" repeatCount="indefinite" path={d} />
+                      </circle>
+                    )}
+                    {edge.label && (() => {
+                      const fx = getNodePos(fn).x + NODE_W;
+                      const tx = getNodePos(tn).x;
+                      const mx = (fx + tx) / 2;
+                      const my = (getNodePos(fn).y + getNodePos(tn).y) / 2 + (isFb ? 100 : NODE_H / 2 - 12);
+                      return (
+                        <text x={mx} y={my} textAnchor="middle" fill={color} fontSize="9.5" fontWeight={isActive ? 600 : 400} fontFamily="var(--font-mono)" letterSpacing="0.08em">{edge.label}</text>
+                      );
+                    })()}
+                  </g>
+                );
+              })}
+            </svg>
+
+            {/* HTML Nodes */}
+            {NODES.map((node) => {
+              const pos = getNodePos(node);
+              const isSel = activeId === node.id;
+              const isHov = hoveredId === node.id;
+              const active = isSel || isHov;
 
               return (
-                <g key={i}>
-                  <path d={d} fill="none" stroke={color} strokeWidth={isActive ? 1.5 : 1} strokeDasharray={edge.dashed ? "4 4" : undefined} markerEnd={`url(#${mark})`} style={{ transition: "stroke 0.3s ease" }} />
-                  {isActive && !isFb && (
-                    <circle r={2.5} fill="#E5C158">
-                      <animateMotion dur="2s" repeatCount="indefinite" path={d} />
-                    </circle>
+                <motion.div
+                  key={node.id}
+                  onClick={() => {
+                    // A drag that ends over a node shouldn't also select it -
+                    // dragState.moved distinguishes "clicked" from "dragged
+                    // and happened to release here".
+                    if (dragState.current.moved) return;
+                    goToId(node.id);
+                  }}
+                  onMouseEnter={() => setHoveredId(node.id)}
+                  onMouseLeave={() => setHoveredId(null)}
+                  animate={{
+                    scale: active ? 1.06 : 1,
+                    borderColor: isSel ? node.accent : isHov ? `${node.accent}60` : "var(--color-graphite-border)",
+                    boxShadow: isSel
+                      ? `0 0 0 1px ${node.accent}40, 0 16px 40px -10px ${node.glow}, inset 0 1px 0 rgba(255,255,255,0.08)`
+                      : `0 8px 24px -6px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.03)`
+                  }}
+                  transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                  style={{
+                    position: "absolute",
+                    left: pos.x,
+                    top: pos.y,
+                    width: NODE_W,
+                    height: NODE_H,
+                    borderRadius: "0.875rem",
+                    borderWidth: "1px",
+                    borderStyle: "solid",
+                    background: "var(--color-void)",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    padding: "0 1.125rem",
+                    gap: "0.75rem",
+                    overflow: "hidden",
+                    zIndex: active ? 10 : 1,
+                  }}
+                >
+                  {/* Background glow */}
+                  <div style={{ position: "absolute", inset: 0, background: active ? node.glow : "transparent", transition: "background 0.3s ease" }} />
+
+                  {/* Accent bar */}
+                  <div style={{ width: "3px", height: "36px", borderRadius: "2px", background: node.accent, opacity: active ? 1 : 0.35, transition: "opacity 0.3s ease", zIndex: 2, flexShrink: 0 }} />
+
+                  <div style={{ zIndex: 2, minWidth: 0 }}>
+                    <div style={{ fontSize: "0.875rem", fontWeight: 600, color: "var(--color-ivory)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{node.label}</div>
+                    <div style={{ fontSize: "0.5625rem", color: active ? node.accent : "var(--color-ash)", letterSpacing: "0.09em", textTransform: "uppercase", fontFamily: "var(--font-mono)", marginTop: "0.2rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", transition: "color 0.3s ease" }}>{node.sub}</div>
+                  </div>
+
+                  {/* Animated selection ring component */}
+                  {isSel && (
+                    <motion.div layoutId="selection-ring" style={{ position: "absolute", inset: 0, border: `1.5px solid ${node.accent}`, borderRadius: "inherit", zIndex: 3 }} transition={{ type: "spring", stiffness: 300, damping: 30 }} />
                   )}
-                  {isActive && isFb && (
-                    <circle r={2.5} fill="#C75858">
-                      <animateMotion dur="2.5s" repeatCount="indefinite" path={d} />
-                    </circle>
-                  )}
-                  {edge.label && (() => {
-                    const fx = getNodePos(fn).x + NODE_W;
-                    const tx = getNodePos(tn).x;
-                    const mx = (fx + tx) / 2;
-                    const my = (getNodePos(fn).y + getNodePos(tn).y) / 2 + (isFb ? 110 : NODE_H / 2 - 12);
-                    return (
-                      <text x={mx} y={my} textAnchor="middle" fill={color} fontSize="9" fontFamily="var(--font-mono)" letterSpacing="0.08em">{edge.label}</text>
-                    );
-                  })()}
-                </g>
+                </motion.div>
               );
             })}
-          </svg>
-
-          {/* HTML Nodes */}
-          {NODES.map((node) => {
-            const pos = getNodePos(node);
-            const isSel = activeId === node.id;
-            const isHov = hoveredId === node.id;
-            const active = isSel || isHov;
-
-            return (
-              <motion.div
-                key={node.id}
-                onClick={() => setActiveId(node.id)}
-                onMouseEnter={() => setHoveredId(node.id)}
-                onMouseLeave={() => setHoveredId(null)}
-                animate={{
-                  scale: active ? 1.05 : 1,
-                  borderColor: isSel ? node.accent : isHov ? `${node.accent}60` : "var(--color-graphite-border)",
-                  boxShadow: isSel 
-                    ? `0 0 0 1px ${node.accent}30, 0 12px 32px -8px ${node.glow}, inset 0 1px 0 rgba(255,255,255,0.08)`
-                    : `0 8px 24px -6px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.03)`
-                }}
-                transition={{ type: "spring", stiffness: 400, damping: 30 }}
-                style={{
-                  position: "absolute",
-                  left: pos.x,
-                  top: pos.y,
-                  width: NODE_W,
-                  height: NODE_H,
-                  borderRadius: "0.75rem",
-                  background: "var(--color-void)",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  padding: "0 1rem",
-                  gap: "0.75rem",
-                  overflow: "hidden",
-                  zIndex: active ? 10 : 1,
-                }}
-              >
-                {/* Background glow */}
-                <div style={{ position: "absolute", inset: 0, background: active ? node.glow : "transparent", transition: "background 0.3s ease" }} />
-                
-                {/* Accent bar */}
-                <div style={{ width: "3px", height: "32px", borderRadius: "2px", background: node.accent, opacity: active ? 1 : 0.3, transition: "opacity 0.3s ease", zIndex: 2 }} />
-                
-                <div style={{ zIndex: 2, minWidth: 0 }}>
-                  <div style={{ fontSize: "0.8125rem", fontWeight: 600, color: "var(--color-ivory)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{node.label}</div>
-                  <div style={{ fontSize: "0.55rem", color: active ? node.accent : "var(--color-ash)", letterSpacing: "0.1em", textTransform: "uppercase", fontFamily: "var(--font-mono)", marginTop: "0.15rem", whiteSpace: "nowrap", transition: "color 0.3s ease" }}>{node.sub}</div>
-                </div>
-
-                {/* Animated selection ring component */}
-                {isSel && (
-                  <motion.div layoutId="selection-ring" style={{ position: "absolute", inset: 0, border: `1px solid ${node.accent}`, borderRadius: "inherit", zIndex: 3 }} transition={{ type: "spring", stiffness: 300, damping: 30 }} />
-                )}
-              </motion.div>
-            );
-          })}
+          </div>
         </div>
+
+        {/* Edge fades: a visual "there's more this way" cue, shown only
+            on the side that actually has more to scroll to. */}
+        <div style={{ position: "absolute", top: 0, bottom: "1px", left: 0, width: "64px", background: "linear-gradient(to right, var(--color-void), transparent)", pointerEvents: "none", opacity: canScrollLeft ? 1 : 0, transition: "opacity 0.25s ease" }} />
+        <div style={{ position: "absolute", top: 0, bottom: "1px", right: 0, width: "64px", background: "linear-gradient(to left, var(--color-void), transparent)", pointerEvents: "none", opacity: canScrollRight ? 1 : 0, transition: "opacity 0.25s ease" }} />
+
+        {/* Prev / next: an explicit, discoverable way to move through the
+            pipeline, since relying on a visitor to guess "scroll sideways"
+            was the whole problem with the previous version. */}
+        <button
+          aria-label="Previous stage"
+          onClick={() => step(-1)}
+          disabled={activeIndex === 0}
+          style={{
+            position: "absolute", left: "14px", top: "50%", transform: "translateY(-50%)",
+            width: "36px", height: "36px", borderRadius: "50%", zIndex: 15,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: "rgba(10,10,14,0.85)", border: "1px solid var(--color-graphite-border)",
+            color: activeIndex === 0 ? "var(--color-graphite-border)" : "var(--color-ivory)",
+            cursor: activeIndex === 0 ? "default" : "pointer",
+            opacity: activeIndex === 0 ? 0.4 : 1,
+            transition: "opacity 0.2s ease, border-color 0.2s ease",
+            backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)",
+          }}
+        >
+          <ChevronLeft size={18} strokeWidth={1.75} />
+        </button>
+        <button
+          aria-label="Next stage"
+          onClick={() => step(1)}
+          disabled={activeIndex === nodeOrder.length - 1}
+          style={{
+            position: "absolute", right: "14px", top: "50%", transform: "translateY(-50%)",
+            width: "36px", height: "36px", borderRadius: "50%", zIndex: 15,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: "rgba(10,10,14,0.85)", border: "1px solid var(--color-graphite-border)",
+            color: activeIndex === nodeOrder.length - 1 ? "var(--color-graphite-border)" : "var(--color-ivory)",
+            cursor: activeIndex === nodeOrder.length - 1 ? "default" : "pointer",
+            opacity: activeIndex === nodeOrder.length - 1 ? 0.4 : 1,
+            transition: "opacity 0.2s ease, border-color 0.2s ease",
+            backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)",
+          }}
+        >
+          <ChevronRight size={18} strokeWidth={1.75} />
+        </button>
+      </div>
+
+      {/* Progress dots: which of the N stages is active, and a direct way
+          to jump to any of them, the same pattern a carousel or an
+          onboarding flow already teaches people to expect. */}
+      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: "0.5rem", padding: "0.875rem 0", background: "var(--color-void)", borderBottom: "1px solid var(--color-graphite-border)" }}>
+        {NODES.map((node) => {
+          const isSel = node.id === activeId;
+          return (
+            <button
+              key={node.id}
+              aria-label={`Go to ${node.label}`}
+              onClick={() => goToId(node.id)}
+              style={{
+                width: isSel ? "20px" : "6px",
+                height: "6px",
+                borderRadius: "3px",
+                background: isSel ? node.accent : "var(--color-graphite-border)",
+                border: "none",
+                cursor: "pointer",
+                padding: 0,
+                transition: "width 0.25s ease, background 0.25s ease",
+              }}
+            />
+          );
+        })}
       </div>
 
       {/* ─── BOTTOM: FIXED INFO PANEL ─── */}
@@ -319,6 +460,9 @@ export function RagArchitectureDiagram() {
                 </span>
                 <span style={{ fontSize: "0.625rem", fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-ash)", fontFamily: "var(--font-mono)" }}>
                   {activeNode.detail.tech}
+                </span>
+                <span style={{ marginLeft: "auto", fontSize: "0.625rem", color: "var(--color-ash)", fontFamily: "var(--font-mono)" }}>
+                  {activeIndex + 1} / {nodeOrder.length}
                 </span>
               </div>
               <h3 style={{ fontSize: "1.5rem", fontWeight: 300, fontFamily: "var(--font-serif)", color: "var(--color-ivory)", marginBottom: "1rem" }}>

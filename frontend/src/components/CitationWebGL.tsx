@@ -1,8 +1,35 @@
 "use client";
 
-import { useRef, useMemo, useEffect } from "react";
+import { useRef, useMemo, useEffect, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
+
+// Canvas throws when WebGL context creation fails (no GPU, a sandboxed
+// browser, some privacy-hardened browsers, older hardware), and that
+// failure surfaces as a rejected promise, not a thrown render error - a
+// React error boundary can't catch it, since error boundaries only see
+// errors thrown during render, not async rejections. The actual fix is
+// to never attempt the Canvas at all when WebGL isn't there: this is a
+// decorative background element, so degrading to simply not rendering
+// is the right failure mode, not an uncaught rejection in the console
+// on every visitor whose browser doesn't have WebGL.
+function isWebGLAvailable(): boolean {
+  // A bare canvas.getContext("webgl") check isn't enough: in a sandboxed
+  // browser with no GPU, that call can return a context object while
+  // THREE.WebGLRenderer's own construction (which requests specific
+  // attributes - antialias, alpha, the same ones Canvas is given below)
+  // still fails. The only check that agrees with what actually happens
+  // is attempting the real thing THREE does, in the same try/catch, and
+  // disposing it immediately either way.
+  try {
+    const canvas = document.createElement("canvas");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.dispose();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // The number of nodes in the citation network visualization
 const NODE_COUNT = 80;
@@ -128,6 +155,20 @@ function CitationNetwork() {
 }
 
 export function CitationWebGL() {
+  const [supported, setSupported] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    setSupported(isWebGLAvailable());
+  }, []);
+
+  // null (not checked yet) and false (checked, unavailable) both render
+  // nothing - the difference only matters to avoid a flash of the check
+  // running, not to the visitor, who never needs to know this element
+  // exists at all when it can't run.
+  if (!supported) {
+    return null;
+  }
+
   return (
     <Canvas
       camera={{ position: [0, 0, 7], fov: 55 }}

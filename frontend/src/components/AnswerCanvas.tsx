@@ -1,25 +1,68 @@
 "use client";
 
 import { motion, AnimatePresence } from "framer-motion";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Edit3, Send, CheckCircle2 } from "lucide-react";
+import { useState, useEffect } from "react";
 
 interface Props {
   answer: string;
+  query: string;
+  sources?: any[];
   status: string;
   refused: boolean;
   isLoading: boolean;
 }
 
+function CitationBadge({ num, sources }: { num: string, sources?: any[] }) {
+  const [isHovered, setIsHovered] = useState(false);
+  const sourceIndex = parseInt(num) - 1;
+  const source = sources?.[sourceIndex];
+
+  return (
+    <span 
+      className="relative inline-block"
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      <span className="citation-badge">
+        {num}
+      </span>
+      <AnimatePresence>
+        {isHovered && source && (
+          <motion.div
+            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 5, scale: 0.95 }}
+            transition={{ type: "spring", stiffness: 500, damping: 25 }}
+            className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 z-50 pointer-events-none"
+          >
+            <div className="apple-blur rounded-xl p-4 flex flex-col gap-2 border border-white/10 shadow-2xl">
+              <div className="text-[0.65rem] uppercase tracking-widest text-[var(--color-gold)] font-bold">
+                Source {num} · {source.court || "Unknown Court"}
+              </div>
+              <p className="text-[0.85rem] text-[var(--color-ivory)] leading-relaxed font-sans line-clamp-3">
+                {source.title || "Untitled Document"}
+              </p>
+              <div className="text-xs text-[var(--color-ash)] font-mono mt-1 pt-2 border-t border-white/5 flex items-center justify-between">
+                <span>{source.stance ? `stance: ${source.stance}` : ""}</span>
+                {typeof source.cited_by === "number" && <span>cited by {source.cited_by}</span>}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </span>
+  );
+}
+
 // Render answer text with interactive citation badges
-function renderAnswer(text: string) {
+function renderAnswer(text: string, sources?: any[]) {
   const parts = text.split(/(\[\d+\])/g);
   return parts.map((part, i) => {
     const match = part.match(/^\[(\d+)\]$/);
     if (match) {
       return (
-        <span key={i} className="citation-badge">
-          {match[1]}
-        </span>
+        <CitationBadge key={i} num={match[1]} sources={sources} />
       );
     }
     // Process markdown bold **text** inline
@@ -41,8 +84,8 @@ function renderAnswer(text: string) {
   });
 }
 
-function renderAnswerWithThinking(text: string) {
-  if (!text.includes("<think>")) return <span className="whitespace-pre-wrap break-words">{renderAnswer(text)}</span>;
+function renderAnswerWithThinking(text: string, sources?: any[]) {
+  if (!text.includes("<think>")) return <span className="whitespace-pre-wrap break-words">{renderAnswer(text, sources)}</span>;
 
   const parts = [];
   let currentText = text;
@@ -98,7 +141,7 @@ function renderAnswerWithThinking(text: string) {
         </details>
       );
     } else {
-      return <span key={i} className="whitespace-pre-wrap break-words">{renderAnswer(part.content)}</span>;
+      return <span key={i} className="whitespace-pre-wrap break-words">{renderAnswer(part.content, sources)}</span>;
     }
   });
 }
@@ -153,7 +196,71 @@ function ReasoningIndicator({ status }: { status: string }) {
   );
 }
 
-export function AnswerCanvas({ answer, status, refused, isLoading }: Props) {
+export function AnswerCanvas({ answer, query, sources, status, refused, isLoading }: Props) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedAnswer, setEditedAnswer] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitSuccess, setSubmitSuccess] = useState(false);
+
+  // Verification console log when answer completes
+  useEffect(() => {
+    if (!isLoading && answer && !refused) {
+      console.log("=========================================");
+      console.log("RAG Verification Report");
+      console.log("=========================================");
+      console.log("Query:", query);
+      console.log("Length (chars):", answer.length);
+      console.log("Contains Citations:", /\[\d+\]/.test(answer) ? "Yes ✅" : "No ❌");
+      console.log("Sources Used:", sources?.length ?? 0);
+      console.log("World Class Quality Check:");
+      if (answer.length > 500 && /\[\d+\]/.test(answer)) {
+        console.log("  Status: EXCELLENT 🌟 (Detailed and grounded)");
+      } else if (answer.length > 100) {
+        console.log("  Status: ADEQUATE 👍 (Could be more detailed)");
+      } else {
+        console.log("  Status: POOR ⚠️ (Too brief)");
+      }
+      console.log("=========================================");
+    }
+  }, [isLoading, answer, refused, query, sources]);
+
+  useEffect(() => {
+    if (answer) {
+      setEditedAnswer(answer);
+      setSubmitSuccess(false);
+      setIsEditing(false);
+    }
+  }, [answer]);
+
+  const handleSubmitCorrection = async () => {
+    if (!editedAnswer.trim() || editedAnswer === answer) {
+      setIsEditing(false);
+      return;
+    }
+    
+    setIsSubmitting(true);
+    try {
+      const response = await fetch("http://127.0.0.1:8000/submit_correction", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: query,
+          original_answer: answer,
+          corrected_answer: editedAnswer,
+        }),
+      });
+      if (response.ok) {
+        setSubmitSuccess(true);
+        setTimeout(() => setSubmitSuccess(false), 3000);
+      }
+    } catch (e) {
+      console.error("Failed to submit correction", e);
+    } finally {
+      setIsSubmitting(false);
+      setIsEditing(false);
+    }
+  };
+
   return (
     <div className="relative">
       <AnimatePresence mode="wait">
@@ -179,15 +286,32 @@ export function AnswerCanvas({ answer, status, refused, isLoading }: Props) {
         </motion.div>
       )}
 
+      {/* Error / Generation Failed state */}
+      {!isLoading && !answer && !refused && (
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex items-start gap-4 p-5 rounded-xl border border-red-900/30 bg-red-950/10 mb-6"
+        >
+          <AlertTriangle className="text-red-600 shrink-0 mt-0.5" size={16} strokeWidth={1.5} />
+          <div>
+            <p className="text-red-500/90 text-sm font-medium mb-1">Generation Failed</p>
+            <p className="text-red-700/70 text-xs leading-relaxed">
+              {status.includes("Error") ? status : "The agent stopped unexpectedly without returning a final answer. Please try again or simplify your query."}
+            </p>
+          </div>
+        </motion.div>
+      )}
+
       {/* Streaming Answer */}
-      {answer && (
+      {answer && !isEditing && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ duration: 0.4 }}
+          transition={{ type: "spring", stiffness: 400, damping: 30 }}
           className="answer-prose text-[var(--color-parchment)] text-[0.975rem] leading-[1.9]"
         >
-          <div>{renderAnswerWithThinking(answer)}</div>
+          <div>{renderAnswerWithThinking(answer, sources)}</div>
 
           {/* Cursor blink while still loading */}
           {isLoading && (
@@ -197,8 +321,58 @@ export function AnswerCanvas({ answer, status, refused, isLoading }: Props) {
               transition={{ duration: 0.7, repeat: Infinity }}
             />
           )}
+
+          {/* HITL Edit Button */}
+          {!isLoading && !refused && (
+            <div className="mt-8 pt-4 border-t border-[var(--color-graphite-border)] flex items-center justify-between">
+              <span className="text-xs text-[var(--color-ash)] opacity-70">See a hallucination or poor citation?</span>
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => setIsEditing(true)}
+                className="flex items-center gap-2 text-[var(--color-ivory)] bg-[var(--color-obsidian)] border border-[var(--color-graphite-border)] px-4 py-2 rounded-md text-sm font-medium hover:bg-white/5 transition-colors"
+              >
+                <Edit3 size={14} /> Correct Answer
+              </motion.button>
+            </div>
+          )}
+          
+          {submitSuccess && (
+             <motion.div 
+               initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} 
+               className="mt-4 flex items-center gap-2 text-green-400 text-sm bg-green-950/30 p-3 rounded-lg border border-green-900/50"
+             >
+               <CheckCircle2 size={16} /> Saved to DPO Training Dataset
+             </motion.div>
+          )}
         </motion.div>
       )}
+
+      {/* Editing State */}
+      {isEditing && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-4">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-[var(--color-ivory)] font-medium text-sm">Human-in-the-Loop DPO Feedback</h3>
+            <button onClick={() => setIsEditing(false)} className="text-[var(--color-ash)] hover:text-white text-sm">Cancel</button>
+          </div>
+          <textarea
+            value={editedAnswer}
+            onChange={(e) => setEditedAnswer(e.target.value)}
+            className="w-full bg-[var(--color-obsidian)] border border-[var(--color-gold)]/40 rounded-xl p-4 text-[var(--color-parchment)] text-[0.975rem] leading-[1.9] min-h-[400px] outline-none focus:border-[var(--color-gold)] transition-colors resize-y"
+          />
+          <div className="flex justify-end">
+            <button
+              onClick={handleSubmitCorrection}
+              disabled={isSubmitting}
+              className="flex items-center gap-2 bg-[var(--color-gold)] text-black px-6 py-2.5 rounded-lg font-bold text-sm hover:opacity-90 transition-opacity disabled:opacity-50"
+            >
+              {isSubmitting ? "Saving..." : <><Send size={14} /> Submit to Training Data</>}
+            </button>
+          </div>
+        </motion.div>
+      )}
+
+
     </div>
   );
 }

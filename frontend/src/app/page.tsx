@@ -18,7 +18,7 @@ const RagArchitectureDiagram = dynamic(
 );
 
 const PIPELINE_STEPS = [
-  { id: "01", name: "Query Router", type: "Deterministic", accent: "#E5C158", glow: "rgba(229,193,88,0.12)", summary: "A rule-based classifier inspects the incoming query before any retriever is invoked. Statutory citations ('AIR 1974 SC 224', 'Section 300 IPC') are dispatched directly to an exact match index, while natural language queries are sent to vector search.", why: "Dense vector embeddings collapse exact citations like 'AIR' into generic 'air', destroying legal precision. Strict separation guarantees zero citation loss.", badge: "EXACT ROUTING" },
+  { id: "01", name: "Query Router", type: "Deterministic", accent: "#E5C158", glow: "rgba(229,193,88,0.12)", summary: "A rule-based classifier inspects the incoming query before any retriever is invoked. Statutory citations ('AIR 1974 SC 224', 'Section 300 IPC') are dispatched directly to an exact match index, while natural language queries are sent to vector search.", why: "Dense vector embeddings collapse exact citations like 'AIR' into generic 'air', destroying legal precision. Measured on a 313-query labelled set: 0.925 recall and a perfect 1.000 MRR on exact-citation queries, up from 0.574 for BM25 alone and 0.049 for dense retrieval.", badge: "EXACT ROUTING" },
   { id: "02", name: "Hybrid Retrieval", type: "BM25 × BGE-Small", accent: "#5882C7", glow: "rgba(88,130,199,0.14)", summary: "Dual retrievers execute in parallel: a case-sensitive BM25 engine for statutory terms, and a bi-encoder dense model (BAAI/bge-small-en-v1.5) for semantic similarity. Candidate lists are combined via Reciprocal Rank Fusion (RRF).", why: "Legal arguments alternate between strict statutory language and doctrinal reasoning. Neither dense nor sparse retrieval alone reaches 90%+ recall.", badge: "RRF MERGE" },
   { id: "03", name: "Authority Weighting", type: "Court Hierarchy", accent: "#E5C158", glow: "rgba(229,193,88,0.12)", summary: "The Indian judicial hierarchy - Supreme Court → High Courts → Tribunals - is encoded as an algebraic multiplier in the re-ranking formula. A binding Supreme Court precedent outranks a single-judge order of equal semantic score.", why: "Relevance without judicial authority is legally useless. A matching passage from a reversed or lower court order is not binding law.", badge: "PRECEDENT SCORING" },
   { id: "04", name: "Stance Detection", type: "Holding vs Submission", accent: "#429B6C", glow: "rgba(66,155,108,0.12)", summary: "Every candidate passage is tagged during indexing: does it record the court's ratio decidendi (holding), or counsel's submission? The prompt generator filters out party arguments before synthesis.", why: "Judgments report what counsel submitted, what the court rejected, and what it held in the same judgment. Without stance tagging, models hallucinate advocate submissions as law.", badge: "RATIO ISOLATION" },
@@ -26,16 +26,16 @@ const PIPELINE_STEPS = [
 ];
 
 const INNOVATIONS = [
-  { tag: "SAC", title: "Summary-Augmented Chunking", body: "Every 450-token chunk is automatically prefixed with a machine-generated 3-sentence summary of its parent judgment - preserving the core issue, ruling, and context in every vector embedding.", metric: "450 Tokens", metricLabel: "Optimal Measured Chunk Size" },
-  { tag: "CS-BM25", title: "Case-Sensitive Tokenisation", body: "Standard LLM tokenizers lowercase all text, destroying citation sensitivity ('AIR' → 'air', 'CrPC' → 'crpc'). Ratio preserves exact capitalization across 414,122 posting lists.", metric: "414,122", metricLabel: "Postings List Chunks" },
-  { tag: "SCO", title: "Enforced Citation Schema", body: "Generation prompts enforce a strict JSON output schema. Factual claims without verifiable source passage IDs are rejected at decoding time before reaching the user.", metric: "100%", metricLabel: "Citation Attributability" },
+  { tag: "SAC", title: "Summary-Augmented Chunking", body: "Every 450-token chunk is automatically prefixed with a machine-generated 3-sentence summary of its parent judgment - preserving the core issue, ruling, and context in every vector embedding. Chunk size was chosen for defensible reasons; it has not itself been swept against the label set, which is recorded rather than implied.", metric: "450 Tokens", metricLabel: "Tokens Per Chunk (SAC-Prefixed)" },
+  { tag: "CS-BM25", title: "Case-Sensitive Tokenisation", body: "Standard LLM tokenizers lowercase all text, destroying citation sensitivity ('AIR' → 'air', 'CrPC' → 'crpc'). Ratio indexes each identifier twice: once atomic and case-preserved, once split into lowercase words, so exact and topical matching share one postings list.", metric: "414,122", metricLabel: "Chunks In The Full Corpus" },
+  { tag: "SCO", title: "Enforced Citation Schema", body: "Generation prompts enforce a strict JSON output schema. A claim without a source ID cannot be emitted at all, measured at 0% uncited claims and 91.2% citation precision on a 15-query structured-output benchmark - the schema forces attribution, it does not by itself guarantee the citation is right.", metric: "0%", metricLabel: "Uncited Claims (Structured Output)" },
 ];
 
 const STATS = [
   { value: "10,588", label: "Indian Court Judgments" },
   { value: "414,122", label: "Indexed Context Chunks" },
-  { value: "375B", label: "Parameter Inference Model" },
-  { value: "100%", label: "Citation Attribution Schema" },
+  { value: "23B active", label: "Inference Model (375B total, MoE)" },
+  { value: "92.5%", label: "Exact-Citation Recall (Measured)" },
 ];
 
 const COURT_ROWS = [
@@ -63,7 +63,7 @@ function HeaderNav() {
   }, []);
 
   return (
-    <header style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 50, transition: "all 0.3s ease", background: scrolled ? "rgba(7,7,10,0.88)" : "transparent", backdropFilter: scrolled ? "blur(16px) saturate(1.4)" : "none", borderBottom: scrolled ? "1px solid var(--color-graphite-border)" : "1px solid transparent" }}>
+    <header style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 50, transition: "all 0.3s ease", background: scrolled ? "rgba(7,7,10,0.97)" : "transparent", backdropFilter: scrolled ? "blur(16px) saturate(1.4)" : "none", WebkitBackdropFilter: scrolled ? "blur(16px) saturate(1.4)" : "none", borderBottom: scrolled ? "1px solid var(--color-graphite-border)" : "1px solid transparent" }}>
       <div className="ratio-container" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: "5rem" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "1.5rem" }}>
           <RatioWordmark size="sm" />
@@ -166,7 +166,7 @@ function ArchitectureSection() {
           <span className="ratio-section-label" style={{ color: "var(--color-gold)" }}>SYSTEM PIPELINE</span>
           <h2 className="ratio-section-title">Five layers of legal precision</h2>
           <p className="ratio-section-body">
-            An interactive map of Ratio&apos;s retrieval pipeline. Drag to reposition, scroll to zoom, click any node to read the engineering rationale.
+            An interactive map of Ratio&apos;s retrieval pipeline. Use the arrows, the dots, or drag to move through it, click any stage to read the engineering rationale.
           </p>
         </FadeIn>
       </div>
@@ -212,7 +212,7 @@ function InnovationsSection() {
         <FadeIn className="ratio-section-header" style={{ maxWidth: "36rem" }}>
           <span className="ratio-section-label" style={{ color: "var(--color-emerald-bright)" }}>CORE INNOVATIONS</span>
           <h2 className="ratio-section-title">Built for judicial ground truth</h2>
-          <p className="ratio-section-body">Architectural guarantees that eliminate hallucinated holdings and broken citations.</p>
+          <p className="ratio-section-body">Structural guarantees where the schema can enforce them, honest measured numbers where it can't - stance labelling reduces hallucinated holdings, it isn't a hard guarantee the way the citation schema is.</p>
         </FadeIn>
         <div className="innovations-grid">
           {INNOVATIONS.map((inn, idx) => (
@@ -302,7 +302,7 @@ function Footer() {
       <div className="ratio-container" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "1rem" }}>
         <RatioWordmark size="sm" />
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "1.5rem" }}>
-          {["BM25 × BGE-SMALL", "K2-HORIZON-375B", "OPENNYAI DATASET"].map((tag) => (
+          {["BM25 × BGE-SMALL", "K2-HORIZON-375B-A23B", "OPENNYAI DATASET"].map((tag) => (
             <span key={tag} className="label-tag" style={{ color: "var(--color-ash)", fontSize: "9px" }}>{tag}</span>
           ))}
         </div>

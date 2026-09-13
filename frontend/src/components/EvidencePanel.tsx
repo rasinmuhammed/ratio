@@ -8,6 +8,16 @@ interface SourceMeta {
   court: string;
   title: string;
   url?: string;
+  // Added alongside the citation-signal card: the same stance/authority
+  // data ask.py has always printed to a terminal (rag/stance.py,
+  // metadata.cited_by), now reaching the web UI. "cited" answers the
+  // question a plain source list can't: of the sources retrieved, which
+  // ones did the model actually rely on for this answer, per
+  // rag.generate.parse_answer against the same [n] markers scored for
+  // citation precision.
+  cited_by?: number;
+  stance?: "holding" | "argument" | "both" | "neither" | string;
+  cited?: boolean;
 }
 
 interface Props {
@@ -48,9 +58,22 @@ const AUTHORITY_CONFIG = {
   },
 };
 
+const STANCE_CONFIG: Record<string, { label: string; color: string }> = {
+  holding: { label: "Holding", color: "var(--color-emerald)" },
+  argument: { label: "Argument", color: "var(--color-gold)" },
+  both: { label: "Holding + Argument", color: "var(--color-emerald)" },
+  neither: { label: "Procedural", color: "var(--color-ash)" },
+};
+
 function CitationCard({ source, delay }: { source: SourceMeta; delay: number }) {
   const tier = getAuthorityTier(source.court);
   const cfg = AUTHORITY_CONFIG[tier];
+  const stance = source.stance ? STANCE_CONFIG[source.stance] : undefined;
+  // "cited" is only meaningful once the model has actually answered - a
+  // source list that arrives before a `cited` field exists (the plain
+  // /stream endpoint, or an older cached response) should not visually
+  // dim every card, so undefined reads as "not yet known", not "unused".
+  const notCited = source.cited === false;
 
   return (
     <motion.a
@@ -58,11 +81,12 @@ function CitationCard({ source, delay }: { source: SourceMeta; delay: number }) 
       target="_blank"
       rel="noopener noreferrer"
       initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
+      animate={{ opacity: notCited ? 0.5 : 1, y: 0 }}
       transition={{ duration: 0.55, delay, ease: [0.16, 1, 0.3, 1] }}
-      whileHover={{ y: -3, transition: { duration: 0.25, ease: "easeOut" } }}
+      whileHover={{ y: -3, opacity: 1, transition: { duration: 0.25, ease: "easeOut" } }}
       className={cfg.cardClass}
       style={{ textDecoration: "none", display: "block", marginBottom: "0.5rem" }}
+      title={notCited ? "Retrieved, but not cited in the answer" : undefined}
     >
       <div style={{ padding: "1.25rem" }}>
         {/* Header row */}
@@ -73,7 +97,7 @@ function CitationCard({ source, delay }: { source: SourceMeta; delay: number }) 
               {[1, 2, 3].map((bar) => (
                 <div
                   key={bar}
-                  style={{ 
+                  style={{
                     width: "3px", borderRadius: "9999px", height: `${bar * 5 + 4}px`,
                     background: bar <= cfg.bars ? cfg.barColorValue : "var(--color-graphite-border)"
                   }}
@@ -91,15 +115,39 @@ function CitationCard({ source, delay }: { source: SourceMeta; delay: number }) 
 
         {/* Case title */}
         <h3 style={{ fontFamily: "var(--font-serif)", fontSize: "0.95rem", lineHeight: 1.55, color: "var(--color-ivory)", margin: "0 0 1rem 0", paddingRight: "0.5rem", fontWeight: 400 }}>
-          {source.title}
+          {source.title || "Untitled Document"}
         </h3>
+
+        {/* Signal row: stance + authority count, the same data ask.py
+            has always printed to a terminal, given real visual weight */}
+        {(stance || typeof source.cited_by === "number") && (
+          <div style={{ display: "flex", alignItems: "center", gap: "0.625rem", marginBottom: "1rem" }}>
+            {stance && (
+              <span style={{ fontSize: "0.6875rem", fontWeight: 600, color: stance.color, background: `color-mix(in srgb, ${stance.color} 14%, transparent)`, padding: "0.2rem 0.5rem", borderRadius: "0.3rem", letterSpacing: "0.02em" }}>
+                {stance.label}
+              </span>
+            )}
+            {typeof source.cited_by === "number" && (
+              <span style={{ fontSize: "0.6875rem", color: "var(--color-ash)", fontFamily: "var(--font-mono)" }}>
+                cited by {source.cited_by} judgment{source.cited_by === 1 ? "" : "s"}
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Footer */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: "1rem", borderTop: "1px solid var(--color-graphite-border)" }}>
           <div style={{ fontSize: "0.625rem", textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 500, color: cfg.colorValue, opacity: 0.6 }}>
             {tier === "supreme" ? "Binding Precedent" : tier === "high" ? "Persuasive Authority" : "Tribunal Decision"}
           </div>
-          <ExternalLink size={12} style={{ color: "var(--color-ash)" }} strokeWidth={1.5} />
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            {source.cited === true && (
+              <span style={{ fontSize: "0.5625rem", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, color: "var(--color-emerald)" }}>
+                Cited in answer
+              </span>
+            )}
+            <ExternalLink size={12} style={{ color: "var(--color-ash)" }} strokeWidth={1.5} />
+          </div>
         </div>
       </div>
     </motion.a>
@@ -183,13 +231,13 @@ export function EvidencePanel({ sources, isLoading, sourceCount }: Props) {
 
       {/* Source list */}
       <div className="hide-scrollbar" style={{ flex: 1, overflowY: "auto", padding: "1.25rem 1.5rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
-        <AnimatePresence mode="popLayout">
+        <AnimatePresence>
           {isLoading && sources.length === 0
             ? [0, 0.08, 0.16].map((d, i) => (
                 <SkeletonCard key={`sk-${i}`} delay={d} />
               ))
-            : sources.map((src, i) => (
-                <CitationCard key={src.index} source={src} delay={i * 0.1} />
+            : sources.slice(0, 15).map((src, i) => (
+                <CitationCard key={`src-${src.index}`} source={src} delay={0} />
               ))}
         </AnimatePresence>
       </div>

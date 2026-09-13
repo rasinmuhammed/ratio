@@ -7,12 +7,16 @@ import { SearchIcon, Landmark, Scale, ScrollText, Shield } from "lucide-react";
 import { EvidencePanel } from "@/components/EvidencePanel";
 import { AnswerCanvas } from "@/components/AnswerCanvas";
 import { RatioWordmark } from "@/components/RatioWordmark";
+import { AgentTerminal, AgentThought } from "@/components/AgentTerminal";
 
 interface SourceMeta {
   index: number;
   court: string;
   title: string;
   url?: string;
+  cited_by?: number;
+  stance?: string;
+  cited?: boolean;
 }
 
 type AppState = "idle" | "searching" | "complete";
@@ -24,6 +28,7 @@ export default function Home() {
   const [statusText, setStatusText] = useState("");
   const [answer, setAnswer] = useState("");
   const [sources, setSources] = useState<SourceMeta[]>([]);
+  const [thoughts, setThoughts] = useState<AgentThought[]>([]);
   const [refused, setRefused] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -48,8 +53,9 @@ export default function Home() {
       setAppState("searching");
       setAnswer("");
       setSources([]);
+      setThoughts([]);
       setRefused(false);
-      setStatusText("Engaging retrieval engine...");
+      setStatusText("Engaging Autonomous Agent...");
 
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
@@ -58,7 +64,7 @@ export default function Home() {
 
       try {
         const res = await fetch(
-          `http://127.0.0.1:8000/stream?query=${encodeURIComponent(q)}&k=6`,
+          `http://127.0.0.1:8000/agent_stream?query=${encodeURIComponent(q)}&k=6`,
           { signal: abortControllerRef.current.signal }
         );
 
@@ -67,32 +73,45 @@ export default function Home() {
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
 
-        let currentEvent = "";
+        let buffer = "";
 
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
-          const raw = decoder.decode(value);
-          const lines = raw.split("\n");
+          buffer += decoder.decode(value, { stream: true });
 
-          for (const line of lines) {
-            if (line.startsWith("event: ")) {
-              currentEvent = line.slice(7).trim();
-            } else if (line.startsWith("data: ")) {
-              const payload = line.slice(6).trim();
-              if (!payload) continue;
-              try {
-                const data = JSON.parse(payload);
-                if (currentEvent === "status") setStatusText(data.message);
-                else if (currentEvent === "delta")
-                  setAnswer((prev) => prev + data.token);
-                else if (currentEvent === "sources") {
-                  setSources(data.sources);
-                  setRefused(data.refused);
-                  setAppState("complete");
-                  setStatusText("");
-                }
-              } catch (_) {}
+          const delimiterRegex = /\r?\n\r?\n/;
+          let match;
+          while ((match = delimiterRegex.exec(buffer)) !== null) {
+            const chunk = buffer.slice(0, match.index);
+            buffer = buffer.slice(match.index + match[0].length);
+
+            let currentEvent = "";
+            for (const line of chunk.split("\n")) {
+              if (line.startsWith("event: ")) {
+                currentEvent = line.slice(7).trim();
+              } else if (line.startsWith("data: ")) {
+                const payload = line.slice(6).trim();
+                if (!payload) continue;
+                try {
+                  const data = JSON.parse(payload);
+                  if (currentEvent === "status") {
+                    setStatusText(data.message);
+                    setThoughts((prev) => [...prev, { id: crypto.randomUUID(), type: "status", content: data.message }]);
+                  } else if (currentEvent === "scratchpad") {
+                    setThoughts((prev) => [...prev, { id: crypto.randomUUID(), type: "scratchpad", content: data.content }]);
+                  } else if (currentEvent === "search") {
+                    setThoughts((prev) => [...prev, { id: crypto.randomUUID(), type: "search", content: data.query }]);
+                  } else if (currentEvent === "delta") {
+                    setAnswer((prev) => prev + data.token);
+                  } else if (currentEvent === "sources") {
+                    setSources(data.sources);
+                    setRefused(data.refused);
+                    setAppState("complete");
+                    setStatusText("");
+                  }
+                } catch (_) {}
+              }
             }
           }
         }
@@ -133,7 +152,7 @@ export default function Home() {
             <motion.div
               initial={{ opacity: 0, y: 24 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}
+              transition={{ type: "spring", stiffness: 400, damping: 30 }}
               className="mb-4"
               style={{ filter: "drop-shadow(0 4px 24px rgba(229,193,88,0.15))" }}
             >
@@ -144,7 +163,7 @@ export default function Home() {
             <motion.p
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.9, delay: 0.1, ease: [0.16, 1, 0.3, 1] }}
+              transition={{ type: "spring", stiffness: 400, damping: 30, delay: 0.1 }}
               style={{ fontSize: "0.75rem", letterSpacing: "0.25em", textTransform: "uppercase", marginBottom: "4rem", fontWeight: 300, background: "linear-gradient(90deg, var(--color-fog) 0%, var(--color-ivory) 50%, var(--color-fog) 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}
             >
               Indian Jurisprudence · AI Reasoning Engine
@@ -154,7 +173,7 @@ export default function Home() {
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.9, delay: 0.18, ease: [0.16, 1, 0.3, 1] }}
+              transition={{ type: "spring", stiffness: 400, damping: 30, delay: 0.18 }}
               style={{ width: "100%", maxWidth: "44rem", position: "relative" }}
             >
               <form onSubmit={handleSubmit} style={{ 
@@ -220,6 +239,8 @@ export default function Home() {
                       animate={{ opacity: 1, scale: 1 }}
                       exit={{ opacity: 0, scale: 0.8 }}
                       type="submit"
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
                       style={{
                         display: "flex", alignItems: "center", justifyContent: "center",
                         width: "2.5rem", height: "2.5rem", borderRadius: "0.75rem",
@@ -237,11 +258,31 @@ export default function Home() {
                 <button id="hidden-submit-btn" type="submit" style={{ display: "none" }} />
               </form>
 
+              {/* A failed submit resets appState to "idle" (see the catch
+                  block in handleSubmit), which is the right recovery so the
+                  user isn't stuck on a dead loading screen, but statusText
+                  used to only ever render inside the active-state UI. The
+                  error message was being set and never shown: someone
+                  hitting a cold-starting or unreachable backend saw their
+                  query just silently do nothing. */}
+              <AnimatePresence>
+                {appState === "idle" && statusText && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    style={{ marginTop: "1rem", padding: "0.75rem 1.25rem", borderRadius: "0.75rem", background: "rgba(199,88,88,0.08)", border: "1px solid rgba(199,88,88,0.25)", color: "var(--color-parchment)", fontSize: "0.8125rem", textAlign: "center" }}
+                  >
+                    {statusText}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
               {/* Premium Suggestion Cards */}
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.35, duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
+                transition={{ type: "spring", stiffness: 400, damping: 30, delay: 0.35 }}
                 style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginTop: "1.5rem" }}
               >
                 {[
@@ -317,6 +358,10 @@ export default function Home() {
                   <strong style={{ color: "var(--color-ivory)" }}>How to test:</strong> You can paste exact legal citations (e.g., <code style={{ color: "var(--color-gold)", background: "rgba(229,193,88,0.1)", padding: "0.1rem 0.3rem", borderRadius: "0.2rem" }}>AIR 1974 SC 224</code>) to see the deterministic router preserve exact capitalization, or ask complex doctrinal questions (e.g., <em style={{ color: "var(--color-ivory)" }}>&quot;Does promissory estoppel apply against the State?&quot;</em>) to trigger the multi-hop dense semantic search.
                 </p>
               </motion.div>
+
+              <p style={{ marginTop: "1.25rem", fontSize: "0.75rem", color: "var(--color-ash)", lineHeight: 1.6, textAlign: "center" }}>
+                Ratio is a research and portfolio project, not a lawyer. Answers are generated from a fixed corpus and can be wrong, incomplete, or out of date. Nothing here is legal advice; verify anything that matters against the primary source.
+              </p>
             </motion.div>
           </motion.div>
         )}
@@ -378,16 +423,45 @@ export default function Home() {
                     style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "var(--color-ivory)", fontSize: "0.875rem", fontFamily: "var(--font-sans)" }}
                   />
                 </form>
+                {/* Facet Filters */}
+                <div className="flex items-center gap-2 mt-3 px-1">
+                  <button className="facet-chip active">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-gold)]"></span>
+                    All Law
+                  </button>
+                  <button className="facet-chip">Supreme Court</button>
+                  <button className="facet-chip">Patna HC</button>
+                  <button className="facet-chip">Statutes</button>
+                </div>
               </div>
 
               {/* Scrollable answer area */}
               <div className="hide-scrollbar" style={{ flex: 1, overflowY: "auto", padding: "1.75rem 2rem" }}>
+                <AnimatePresence>
+                  {(appState === "searching" || (appState === "complete" && !answer)) && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0, overflow: "hidden" }}
+                      transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                    >
+                      <AgentTerminal thoughts={thoughts} />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
                 <AnswerCanvas
                   answer={answer}
+                  query={submittedQuery}
+                  sources={sources}
                   status={statusText}
                   refused={refused}
                   isLoading={appState === "searching"}
                 />
+                {appState === "complete" && answer && !refused && (
+                  <p style={{ marginTop: "1.5rem", fontSize: "0.6875rem", color: "var(--color-ash)", lineHeight: 1.6, borderTop: "1px solid var(--color-graphite-border)", paddingTop: "1rem" }}>
+                    Not legal advice. Generated from a fixed corpus and can be wrong or incomplete; verify against the cited sources before relying on it.
+                  </p>
+                )}
               </div>
             </div>
 
@@ -395,7 +469,7 @@ export default function Home() {
             <motion.div
               initial={{ x: 60, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
-              transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1], delay: 0.1 }}
+              transition={{ type: "spring", stiffness: 400, damping: 30, delay: 0.1 }}
               style={{ display: "flex", flexDirection: "column", width: "45%", minWidth: 0, flexShrink: 0, height: "100%", background: "var(--color-obsidian)" }}
             >
               <EvidencePanel
