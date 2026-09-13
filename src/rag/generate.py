@@ -209,6 +209,7 @@ class LLM(Protocol):
     Protocol so generation logic never depends on a provider."""
 
     def complete(self, system: str, user: str) -> str: ...
+    def chat(self, messages: list[dict], tools: list[dict] | None = None) -> dict: ...
 
 
 class Searcher(Protocol):
@@ -340,6 +341,56 @@ class GroqLLM:
                 # answers made it look impossible until it happened anyway.
                 content = choice["message"].get("content")
                 return (content or "").strip()
+
+            if attempt == self.retries - 1:
+                break
+            wait = float(response.headers.get("retry-after", 0)) or 2 ** attempt * 5
+            logger.info("status %d, waiting %.0fs", response.status_code, wait)
+            self.sleep(min(wait + 1, 30))
+
+        raise RuntimeError(f"Groq gave status {response.status_code} after all retries: {response.text[:200]}")
+
+    def chat(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
+        """Raw chat completion supporting tools, for the agent loop.
+
+        The `LLM` Protocol declares chat() alongside complete(), but until
+        now only IFMLLM implemented it, the provider the agent happened to
+        be written against. get_llm() defaults to GroqLLM, so any deployment
+        that did not explicitly set LLM_PROVIDER=ifm was one agent request
+        away from an AttributeError with no fallback and no test catching
+        it. openai/gpt-oss-120b supports tool calling on Groq's own API, so
+        this is a real implementation, not a stub.
+        """
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.0,
+            "max_tokens": self.max_tokens,
+        }
+        if tools:
+            payload["tools"] = tools
+
+        for attempt in range(self.retries):
+            try:
+                response = httpx.post(
+                    GROQ_URL,
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json=payload,
+                    timeout=self.timeout,
+                )
+            except httpx.TransportError as exc:
+                if attempt == self.retries - 1:
+                    raise RuntimeError(f"Groq connection failed: {exc}") from exc
+                wait = 2 ** attempt * 5
+                logger.info("connection error (%s), retrying in %ds", exc, wait)
+                self.sleep(wait)
+                continue
+
+            if response.status_code not in RETRYABLE_STATUS:
+                response.raise_for_status()
+                choice = response.json()["choices"][0]
+                self.last_finish_reason = choice.get("finish_reason")
+                return choice.get("message", {})
 
             if attempt == self.retries - 1:
                 break
@@ -565,6 +616,62 @@ class MercuryLLM:
 
         raise RuntimeError(f"Mercury gave status {response.status_code} after all retries: {response.text[:200]}")
 
+    def chat(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
+        """Raw chat completion supporting tools.
+
+        Unverified against a real tool-calling turn: Mercury is a diffusion
+        model documented for chat completions, not specifically for function
+        calling, the same gap that left the agent silently broken against
+        every non-IFM provider until this was checked. Implemented to the
+        same OpenAI-compatible contract as complete() rather than left
+        missing, but treat a tool-calling run against this provider as
+        untested until it has actually been run and read, not assumed
+        working because the request shape matches.
+        """
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.5,
+            "max_tokens": self.max_tokens,
+        }
+        if tools:
+            payload["tools"] = tools
+
+        for attempt in range(self.retries):
+            try:
+                response = httpx.post(
+                    MERCURY_URL,
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json=payload,
+                    timeout=httpx.Timeout(
+                        connect=10.0, read=self.timeout, write=10.0, pool=10.0,
+                    ),
+                )
+            except httpx.TransportError as exc:
+                if attempt == self.retries - 1:
+                    raise RuntimeError(f"Mercury connection failed: {exc}") from exc
+                wait = 2 ** attempt * 5
+                logger.info("connection error (%s), retrying in %ds", exc, wait)
+                self.sleep(wait)
+                continue
+
+            if response.status_code not in RETRYABLE_STATUS:
+                response.raise_for_status()
+                body = response.json()
+                if body.get("warning"):
+                    logger.warning("Mercury: %s", body["warning"])
+                choice = body["choices"][0]
+                self.last_finish_reason = choice.get("finish_reason")
+                return choice.get("message", {})
+
+            if attempt == self.retries - 1:
+                break
+            wait = float(response.headers.get("retry-after", 0)) or 2 ** attempt * 5
+            logger.info("status %d, waiting %.0fs", response.status_code, wait)
+            self.sleep(min(wait + 1, 90))
+
+        raise RuntimeError(f"Mercury gave status {response.status_code} after all retries: {response.text[:200]}")
+
 
 class TokenRouterLLM:
     def __init__(
@@ -657,6 +764,53 @@ class TokenRouterLLM:
 
         raise RuntimeError(f"TokenRouter gave status {response.status_code} after all retries: {response.text[:200]}")
 
+    def chat(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
+        """Raw chat completion supporting tools. Same caveat as complete():
+        nothing about this provider's tool-calling behaviour is measured
+        yet, only assumed from the OpenAI-compatible surface it exposes.
+        """
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.0,
+            "max_tokens": self.max_tokens,
+        }
+        if tools:
+            payload["tools"] = tools
+
+        for attempt in range(self.retries):
+            try:
+                response = httpx.post(
+                    TOKEN_ROUTER_URL,
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json=payload,
+                    timeout=httpx.Timeout(
+                        connect=10.0, read=self.timeout, write=10.0, pool=10.0,
+                    ),
+                )
+            except httpx.TransportError as exc:
+                if attempt == self.retries - 1:
+                    raise RuntimeError(
+                        f"TokenRouter connection failed: {exc}") from exc
+                wait = 2 ** attempt * 5
+                logger.info("connection error (%s), retrying in %ds", exc, wait)
+                self.sleep(wait)
+                continue
+
+            if response.status_code not in RETRYABLE_STATUS:
+                response.raise_for_status()
+                choice = response.json()["choices"][0]
+                self.last_finish_reason = choice.get("finish_reason")
+                return choice.get("message", {})
+
+            if attempt == self.retries - 1:
+                break
+            wait = float(response.headers.get("retry-after", 0)) or 2 ** attempt * 5
+            logger.info("status %d, waiting %.0fs", response.status_code, wait)
+            self.sleep(min(wait + 1, 30))
+
+        raise RuntimeError(f"TokenRouter gave status {response.status_code} after all retries: {response.text[:200]}")
+
 
 class IFMLLM:
     def __init__(
@@ -721,6 +875,55 @@ class IFMLLM:
                 if content:
                     content = _THINK_RE.sub("", content).strip()
                 return (content or "").strip()
+
+            if attempt == self.retries - 1:
+                break
+            wait = float(response.headers.get("retry-after", 0)) or 2 ** attempt * 5
+            logger.info("status %d, waiting %.0fs", response.status_code, wait)
+            self.sleep(min(wait + 1, 30))
+
+        raise RuntimeError(f"IFM gave status {response.status_code} after all retries: {response.text[:200]}")
+
+    def chat(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
+        """Raw chat completion endpoint supporting tools."""
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.6,
+            "max_tokens": self.max_tokens,
+        }
+        if tools:
+            payload["tools"] = tools
+
+        for attempt in range(self.retries):
+            try:
+                response = httpx.post(
+                    IFM_URL,
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json=payload,
+                    timeout=httpx.Timeout(
+                        connect=10.0, read=self.timeout, write=10.0, pool=10.0,
+                    ),
+                )
+            except httpx.TransportError as exc:
+                if attempt == self.retries - 1:
+                    raise RuntimeError(f"IFM connection failed: {exc}") from exc
+                wait = 2 ** attempt * 5
+                logger.info("connection error (%s), retrying in %ds", exc, wait)
+                self.sleep(wait)
+                continue
+
+            if response.status_code not in RETRYABLE_STATUS:
+                response.raise_for_status()
+                choice = response.json()["choices"][0]
+                message = choice.get("message", {})
+                
+                # Strip thinking tags from content if present
+                content = message.get("content")
+                if content:
+                    message["content"] = _THINK_RE.sub("", content).strip()
+                    
+                return message
 
             if attempt == self.retries - 1:
                 break

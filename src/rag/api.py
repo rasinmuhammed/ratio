@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -18,15 +19,27 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from rag.audit import init_db, log_request
+from rag.agent import LegalAgent
+from rag.audit import init_db, log_request, log_correction
 from rag.corrective import corrective_answer
-from rag.generate import CONTEXT_BUDGET, SYSTEM_PROMPT, answer, build_prompt, get_llm
+from rag.generate import (
+    CONTEXT_BUDGET, SYSTEM_PROMPT, answer, build_prompt, get_llm, parse_answer,
+)
 from rag.hybrid import HybridRetriever
 from rag.rerank import CrossEncoderReranker, RerankedRetriever
 from rag.route import RoutedRetriever, classify
+from rag.stance import classify as stance_of
 
-# Default to the small sweep index for testing, but can be overridden
-INDEX_DIR = Path("data/index-sweep-450")
+# data/index-sweep-450 was a leftover from the chunk-size sweep experiment
+# (2,767 chunks) rather than the real corpus, and was silently the default
+# here: every live query was answered from 0.7% of the indexed corpus while
+# the landing page advertised 414,122 chunks. data/index (6,476 chunks) is
+# a real, complete index built the same way as the full one, just smaller.
+# It is not the full corpus either — data/index-full has the vectors for
+# all 414,122 chunks but is missing payloads.jsonl and cannot load yet — so
+# this is the honest default until that rebuild happens, not the finished
+# one. Override with RATIO_INDEX_DIR for anything else.
+INDEX_DIR = Path(os.environ.get("RATIO_INDEX_DIR", "data/index"))
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +83,17 @@ class QueryRequest(BaseModel):
     query: str
     k: int = 6
     stance_notes: bool = True
+
+class CorrectionRequest(BaseModel):
+    query: str
+    original_answer: str
+    corrected_answer: str
+
+@app.post("/submit_correction")
+async def submit_correction(req: CorrectionRequest):
+    """Save human feedback for Direct Preference Optimization (DPO)."""
+    log_correction(req.query, req.original_answer, req.corrected_answer)
+    return {"status": "success", "message": "Correction saved to training dataset."}
 
 class SourceResponse(BaseModel):
     id: str
@@ -230,6 +254,83 @@ async def stream_endpoint(request: Request, query: str, k: int = 6, stance_notes
         yield {
             "event": "sources",
             "data": json.dumps({"sources": sources_meta, "refused": refused})
+        }
+        
+    return EventSourceResponse(event_generator())
+
+@app.get("/agent_stream")
+async def agent_stream_endpoint(request: Request, query: str, k: int = 6):
+    """SSE streaming endpoint for the Autonomous LegalAgent."""
+    async def event_generator():
+        agent = LegalAgent(state.llm, state.retriever, k=k)
+        
+        yield {
+            "event": "status",
+            "data": json.dumps({"message": "Agent initialized. Analyzing query..."})
+        }
+        
+        final_answer = ""
+        for event in agent.stream(query):
+            if await request.is_disconnected():
+                break
+                
+            if event["type"] == "scratchpad":
+                yield {
+                    "event": "scratchpad",
+                    "data": json.dumps({"content": event["content"]})
+                }
+            elif event["type"] == "search":
+                yield {
+                    "event": "search",
+                    "data": json.dumps({"query": event["content"]})
+                }
+            elif event["type"] == "final_answer":
+                final_answer = event["content"]
+                # In agent mode, the final answer isn't streamed token-by-token yet because
+                # IFM chat doesn't support streaming tools + text natively in our wrapper.
+                # So we just dump the whole answer.
+                yield {
+                    "event": "delta",
+                    "data": json.dumps({"token": final_answer})
+                }
+            elif event["type"] == "error":
+                yield {
+                    "event": "status",
+                    "data": json.dumps({"message": f"Error: {event['content']}"})
+                }
+                
+        # parse_answer reads the same [n] markers generate.answer scores
+        # citation precision with. format_search_results now numbers every
+        # source by its position in agent.all_sources (see that docstring),
+        # so those markers finally refer to a stable, real index instead of
+        # restarting at [1] on every search call, and this is the first
+        # point the agent's output has been checked against its sources at
+        # all rather than trusted as-is.
+        refused, cited, invalid_citations = parse_answer(
+            final_answer, len(agent.all_sources))
+
+        # Send sources so UI can render the EvidencePanel, now carrying the
+        # same stance and authority signal ask.py has always printed to a
+        # terminal, plus whether the model actually cited each one.
+        sources_meta = []
+        for i, s in enumerate(agent.all_sources.values(), start=1):
+            sources_meta.append({
+                "index": i,
+                "court": s.metadata.get("court", ""),
+                "title": s.metadata.get("title", ""),
+                "url": s.metadata.get("url"),
+                "cited_by": s.metadata.get("cited_by", 0),
+                "stance": stance_of(s.text),
+                "cited": i in cited,
+            })
+
+        yield {
+            "event": "sources",
+            "data": json.dumps({
+                "sources": sources_meta,
+                "refused": refused,
+                "invalid_citations": invalid_citations,
+            })
         }
         
     return EventSourceResponse(event_generator())

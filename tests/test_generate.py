@@ -1,9 +1,13 @@
 import re
 
+import httpx
 import pytest
 
 from rag.generate import (
     REFUSAL,
+    GroqLLM,
+    MercuryLLM,
+    TokenRouterLLM,
     answer,
     answer_structured,
     build_prompt,
@@ -271,3 +275,61 @@ def test_structured_passes_the_schema_and_omits_the_bracket_reminder():
     answer_structured("q", FakeSearcher([_chunk(1, "alpha")]), llm)
     assert llm.last_schema == GROUNDED_ANSWER_SCHEMA
     assert "square brackets" not in llm.last_user
+
+
+def _fake_response(status_code: int, payload: dict, headers: dict | None = None):
+    class _Resp:
+        def __init__(self):
+            self.status_code = status_code
+            self.headers = headers or {}
+            self.text = str(payload)
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise httpx.HTTPStatusError(
+                    "error", request=None, response=self)
+
+        def json(self):
+            return payload
+
+    return _Resp()
+
+
+@pytest.mark.parametrize("cls,env_key,url_attr", [
+    (GroqLLM, "GROQ_API_KEY", "GROQ_URL"),
+    (MercuryLLM, "INCEPTION_API_KEY", "MERCURY_URL"),
+    (TokenRouterLLM, "TOKEN_ROUTER_API_KEY", "TOKEN_ROUTER_URL"),
+])
+def test_chat_returns_tool_calls_for_every_provider(
+        monkeypatch, cls, env_key, url_attr):
+    """The live bug this guards: the agent's tool-calling loop calls
+    llm.chat(...) on whatever get_llm() returns, and get_llm() defaults to
+    GroqLLM. Until now only IFMLLM implemented chat(), so any deployment
+    that never set LLM_PROVIDER=ifm hit an AttributeError on the first
+    agent request, with no test catching it. This exercises chat() against
+    a mocked transport for every provider that implements the LLM Protocol,
+    not just the one the agent happened to be written against.
+    """
+    monkeypatch.setenv(env_key, "test-key")
+    tool_call_message = {
+        "role": "assistant",
+        "tool_calls": [{
+            "id": "call_1",
+            "function": {"name": "search_index",
+                         "arguments": '{"query": "q", "scratchpad": "s"}'},
+        }],
+    }
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        assert json["tools"], "tools must be forwarded to the provider"
+        return _fake_response(
+            200, {"choices": [{"message": tool_call_message,
+                                "finish_reason": "tool_calls"}]})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    llm = cls()
+    message = llm.chat(
+        [{"role": "user", "content": "q"}],
+        tools=[{"type": "function", "function": {"name": "search_index"}}],
+    )
+    assert message["tool_calls"][0]["function"]["name"] == "search_index"

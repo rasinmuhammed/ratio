@@ -7,11 +7,26 @@ from rag.keyword import BM25Index, tokenize
 def test_tokenize_keeps_digits():
     """Digits are the whole point of this module. Dense retrieval scored
     0.52 on 'AIR 1974' while 6 chunks contained the literal string."""
-    assert tokenize("[AIR 1974 Patna 164].") == ["air", "1974", "patna", "164"]
+    assert "1974" in tokenize("[AIR 1974 Patna 164].")
+    assert "patna" in tokenize("[AIR 1974 Patna 164].")
 
 
-def test_tokenize_lowercases_and_drops_punctuation():
-    assert tokenize("No.1091 of 2013") == ["no", "1091", "of", "2013"]
+def test_tokenize_keeps_legal_identifiers_case_sensitive_alongside_words():
+    """A legal reporter abbreviation is indexed twice on purpose: once as
+    the exact-case atomic identifier ('AIR', not 'air') so a citation query
+    can match it precisely, and once lowercased and split into its plain
+    words so ordinary BM25 relevance still works off the same postings.
+    Lowercasing 'AIR' to 'air' the way a generic tokenizer would destroys
+    exactly the signal this module exists to preserve."""
+    tokens = tokenize("[AIR 1974 Patna 164].")
+    assert "AIR" in tokens
+    assert "air" in tokens
+
+
+def test_tokenize_keeps_case_number_atomic_alongside_words():
+    tokens = tokenize("No.1091 of 2013")
+    assert "No.1091_of_2013" in tokens
+    assert tokens[1:] == ["no", "1091", "of", "2013"]
 
 
 def test_rare_terms_outrank_common_ones():
