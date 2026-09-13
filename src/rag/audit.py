@@ -12,55 +12,63 @@ DB_PATH = Path("data/audit.db")
 
 def _connect() -> sqlite3.Connection:
     """Every function below used to call sqlite3.connect(DB_PATH) directly,
-    which only worked because data/ already existed on whatever machine
-    happened to run this first. init_db() creates the directory, but
-    nothing enforced init_db() running before log_request, log_correction,
-    save_session or load_session, and a fresh checkout with no data/ at
-    all (a CI runner, a first-time clone) hit sqlite3.OperationalError:
-    unable to open database file the first time any of them ran without
-    init_db() having been called first. Centralising the connection here
-    means the directory exists regardless of call order.
+    then, once, called through a version of this helper that only created
+    the directory. Both looked fine because data/ and the tables already
+    existed on whatever machine ran this first. A fresh checkout has
+    neither: the directory fix alone still failed with "no such table:
+    request_log" the moment any of these ran without init_db() called
+    first, same bug one layer deeper. CREATE TABLE IF NOT EXISTS is
+    idempotent and cheap, so every connection now guarantees the full
+    schema exists rather than trusting call order, and init_db() is kept
+    only as an explicit, readable thing to call at startup, not as a
+    precondition anything else silently depends on.
     """
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS request_log (
+            id INTEGER PRIMARY KEY,
+            ts TEXT NOT NULL,
+            query TEXT NOT NULL,
+            route TEXT,
+            refused INTEGER,
+            n_sources INTEGER,
+            n_cited INTEGER,
+            invalid_cites TEXT,
+            score_gap REAL,
+            truncated INTEGER,
+            retriever_ms INTEGER,
+            generation_ms INTEGER,
+            llm_model TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS agent_sessions (
+            session_id TEXT PRIMARY KEY,
+            messages TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS dpo_feedback (
+            id INTEGER PRIMARY KEY,
+            query TEXT NOT NULL,
+            original_answer TEXT NOT NULL,
+            corrected_answer TEXT NOT NULL,
+            ts TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    return conn
 
 
 def init_db() -> None:
-    """Create the audit table if it does not exist."""
-    with _connect() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS request_log (
-                id INTEGER PRIMARY KEY,
-                ts TEXT NOT NULL,
-                query TEXT NOT NULL,
-                route TEXT,
-                refused INTEGER,
-                n_sources INTEGER,
-                n_cited INTEGER,
-                invalid_cites TEXT,
-                score_gap REAL,
-                truncated INTEGER,
-                retriever_ms INTEGER,
-                generation_ms INTEGER,
-                llm_model TEXT
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS agent_sessions (
-                session_id TEXT PRIMARY KEY,
-                messages TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS dpo_feedback (
-                id INTEGER PRIMARY KEY,
-                query TEXT NOT NULL,
-                original_answer TEXT NOT NULL,
-                corrected_answer TEXT NOT NULL,
-                ts TEXT NOT NULL
-            )
-        """)
+    """Kept as an explicit call for startup logging (see api.py's
+    lifespan), even though _connect() no longer needs it to have run
+    first. An empty connect-and-close is enough: the schema creation
+    lives in _connect() now.
+    """
+    _connect().close()
 
 def log_request(
     query: str,
