@@ -29,6 +29,22 @@ def init_db() -> None:
                 llm_model TEXT
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS agent_sessions (
+                session_id TEXT PRIMARY KEY,
+                messages TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS dpo_feedback (
+                id INTEGER PRIMARY KEY,
+                query TEXT NOT NULL,
+                original_answer TEXT NOT NULL,
+                corrected_answer TEXT NOT NULL,
+                ts TEXT NOT NULL
+            )
+        """)
 
 def log_request(
     query: str,
@@ -66,4 +82,46 @@ def log_request(
             retriever_ms,
             generation_ms,
             llm_model
+        ))
+
+import json
+
+def save_session(session_id: str, messages: list[dict]) -> None:
+    """Save an agent conversation session to the database."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            INSERT INTO agent_sessions (session_id, messages, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                messages=excluded.messages,
+                updated_at=excluded.updated_at
+        """, (
+            session_id,
+            json.dumps(messages),
+            time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        ))
+
+def load_session(session_id: str) -> list[dict] | None:
+    """Load an agent conversation session from the database."""
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.execute(
+            "SELECT messages FROM agent_sessions WHERE session_id = ?",
+            (session_id,)
+        )
+        row = cursor.fetchone()
+        if row:
+            return json.loads(row[0])
+        return None
+
+def log_correction(query: str, original_answer: str, corrected_answer: str) -> None:
+    """Save human-in-the-loop feedback for Direct Preference Optimization (DPO)."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            INSERT INTO dpo_feedback (query, original_answer, corrected_answer, ts)
+            VALUES (?, ?, ?, ?)
+        """, (
+            query,
+            original_answer,
+            corrected_answer,
+            time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         ))

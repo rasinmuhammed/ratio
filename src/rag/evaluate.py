@@ -102,7 +102,10 @@ def evaluate(searcher: Searcher, queries: list[LabelledQuery],
     generate.answer and is now paying for itself a second time.
     """
     results = []
-    for labelled in queries:
+    print(f"Evaluating {searcher.__class__.__name__} on {len(queries)} queries...")
+    for i, labelled in enumerate(queries):
+        if i % 5 == 0:
+            print(f"  Query {i}/{len(queries)}")
         retrieved = [r.chunk_id for r in searcher.search(labelled.query, k=k)]
         results.append(QueryResult(
             query=labelled.query,
