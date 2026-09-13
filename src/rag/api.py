@@ -14,9 +14,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from rag.agent import LegalAgent
@@ -27,6 +28,8 @@ from rag.generate import (
     CONTEXT_BUDGET, SYSTEM_PROMPT, answer, build_prompt, get_llm, parse_answer,
 )
 from rag.hybrid import HybridRetriever
+from rag.index_fetch import ensure_index
+from rag.ratelimit import RateLimiter, rate_limit_dependency
 from rag.rerank import CrossEncoderReranker, RerankedRetriever
 from rag.route import RoutedRetriever, classify
 from rag.stance import classify as stance_of
@@ -58,6 +61,12 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing SQLite audit log...")
     init_db()
 
+    # A no-op locally (RATIO_INDEX_REPO unset): nothing about local
+    # development changes. On a fresh deploy target with no index on
+    # disk, this pulls one from a HF Hub dataset repo before
+    # HybridRetriever gets a chance to raise FileNotFoundError over it.
+    ensure_index(INDEX_DIR, repo=os.environ.get("RATIO_INDEX_REPO"))
+
     logger.info("Loading index from %s...", INDEX_DIR)
     started = time.time()
     hybrid = HybridRetriever(INDEX_DIR)
@@ -77,17 +86,58 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Ratio RAG API", lifespan=lifespan)
 
+# Wildcard by default so local development (frontend on any localhost port)
+# never needs configuring. Once a deploy target has a real frontend origin,
+# RATIO_ALLOWED_ORIGINS should be set to it, comma-separated for more than
+# one; left unset, behaviour is unchanged from before this was added.
+_allowed_origins = os.environ.get("RATIO_ALLOWED_ORIGINS")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins.split(",") if _allowed_origins else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Every /query, /stream and /agent_stream call costs a real LLM call
+# against a paid or rate-limited provider. One shared limiter across all
+# three, rather than one each, because the actual resource being protected
+# (the LLM quota) is shared too. 20 requests per 5 minutes is a starting
+# number for a portfolio demo, not a load-tested ceiling.
+_query_rate_limiter = RateLimiter(max_requests=20, window_seconds=300)
+_rate_limit = rate_limit_dependency(_query_rate_limiter)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Every endpoint below this line had zero exception handling before
+    this: a malformed request, a disconnected LLM provider, or a genuine
+    bug all surfaced as FastAPI's bare default 500. This doesn't make
+    those conditions not happen, it makes them return a clean, generic
+    JSON error instead of leaking an internal stack trace to whoever's
+    looking, which matters the moment this is public rather than a
+    terminal only one person sees.
+    """
+    logger.exception("unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "internal error, the team has been notified"},
+    )
+
+
+@app.get("/health")
+async def health() -> dict:
+    """Whatever host this ends up on (Spaces, Cloud Run, a real VM) needs
+    a cheap way to ask "is this actually up", separate from whether a
+    real query would currently succeed. FastAPI doesn't route requests
+    until lifespan's startup half completes, so state.retriever is always
+    set by the time this can be called."""
+    return {"status": "ok", "chunks_indexed": len(state.retriever.payloads)}
+
+
 class QueryRequest(BaseModel):
-    query: str
-    k: int = 6
+    query: str = Field(min_length=1, max_length=2000)
+    k: int = Field(default=6, ge=1, le=20)
     stance_notes: bool = True
 
 class CorrectionRequest(BaseModel):
@@ -131,7 +181,7 @@ class AnswerResponse(BaseModel):
     cited_source_indices: list[int]
     crag_used: bool
 
-@app.post("/query", response_model=AnswerResponse)
+@app.post("/query", response_model=AnswerResponse, dependencies=[Depends(_rate_limit)])
 async def query_endpoint(req: QueryRequest):
     """Synchronous generation. Waits for the full K2-Horizon response."""
     # Keyed on query text alone, not (query, k, stance_notes): a cache hit
@@ -149,13 +199,26 @@ async def query_endpoint(req: QueryRequest):
 
     t0 = time.time()
     # 1. First Pass Retrieval & Generation
-    result = answer(
-        req.query, 
-        state.retriever, 
-        state.llm, 
-        k=req.k,
-        stance_notes=req.stance_notes
-    )
+    try:
+        result = answer(
+            req.query,
+            state.retriever,
+            state.llm,
+            k=req.k,
+            stance_notes=req.stance_notes
+        )
+    except RuntimeError as exc:
+        # Every provider in generate.py raises RuntimeError once its own
+        # retries are exhausted (rate limited, connection reset, a bad
+        # status held past every retry). That is a real, expected failure
+        # mode for a paid third-party API, not a bug in this code, so it
+        # gets a 503 the caller can reasonably retry rather than the
+        # generic 500 the exception handler above would otherwise give it.
+        logger.warning("LLM provider failed for query: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="the language model provider is currently unavailable, please try again",
+        ) from exc
     retriever_ms = int((time.time() - t0) * 1000)
     
     # 2. Corrective RAG (CRAG) Fallback
@@ -209,9 +272,17 @@ async def query_endpoint(req: QueryRequest):
     state.cache.put(req.query, response)
     return response
 
-@app.get("/stream")
+@app.get("/stream", dependencies=[Depends(_rate_limit)])
 async def stream_endpoint(request: Request, query: str, k: int = 6, stance_notes: bool = True):
     """Server-Sent Events (SSE) streaming endpoint."""
+    # query/k arrive as raw GET params, not through a validated Pydantic
+    # model the way QueryRequest is, so this endpoint had no equivalent of
+    # QueryRequest's min_length/ge/le constraints until now.
+    if not query or not query.strip():
+        raise HTTPException(status_code=400, detail="query must not be empty")
+    if not 1 <= k <= 20:
+        raise HTTPException(status_code=400, detail="k must be between 1 and 20")
+
     async def event_generator():
         route = classify(query)
         yield {
@@ -288,9 +359,14 @@ async def stream_endpoint(request: Request, query: str, k: int = 6, stance_notes
         
     return EventSourceResponse(event_generator())
 
-@app.get("/agent_stream")
+@app.get("/agent_stream", dependencies=[Depends(_rate_limit)])
 async def agent_stream_endpoint(request: Request, query: str, k: int = 6):
     """SSE streaming endpoint for the Autonomous LegalAgent."""
+    if not query or not query.strip():
+        raise HTTPException(status_code=400, detail="query must not be empty")
+    if not 1 <= k <= 20:
+        raise HTTPException(status_code=400, detail="k must be between 1 and 20")
+
     async def event_generator():
         # A cache hit skips the agent loop entirely: no retrieval, no
         # LLM call, an SSE sequence shaped exactly like a real answer's so
