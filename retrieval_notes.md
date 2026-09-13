@@ -770,3 +770,46 @@ exception instead, discarding real progress on query 8 of 15. Fixed once,
 as a shared constant (`RETRYABLE_STATUS = {429, 500, 502, 503, 504}`) rather
 than patched into the one provider that happened to trigger it first, since
 nothing about the gap was provider-specific.
+
+## 14. Reranker upgrade paths: one confirmed loss, one untested for a real reason
+
+Two candidates were tried against `BAAI/bge-reranker-base`, the existing
+default, on the full 313-label set (`scripts/evaluate.py --reranker`).
+
+`BAAI/bge-reranker-large` (560M params) was never measured. Loading a
+second `CrossEncoder` in the same process as the first reproducibly
+deadlocked sentence-transformers/tokenizers before evaluation ever started,
+confirmed twice, weights fully loaded, zero CPU progress after. Fixed by
+making `--reranker` a swap rather than a side-by-side addition, one model
+per process. That fix uncovered the real blocker: a single process running
+`bge-reranker-large` alone over hundreds of sequential CPU forward passes
+grew to 5.1GB RSS on a 6,476-chunk index that should not need it, most
+likely PyTorch's CPU allocator not releasing memory between variable-length
+batches rather than a leak in this code (`evaluate()` only ever retains
+`chunk_id` strings, not chunk text, confirmed by reading it rather than
+guessing). On an 8GB machine already running Antigravity IDE, Claude
+Desktop and a live corpus-summarisation job, that is a real, undramatic
+resource ceiling, not a finding about the model's quality. Recorded as
+untested for a stated reason, not skipped without one.
+
+`cross-encoder/ms-marco-MiniLM-L-12-v2` (33M params, MS MARCO web-search
+training, chosen specifically for a small memory footprint) completed the
+full sweep cleanly and lost on every metric that depends on reranking:
+
+```
+                    MiniLM-L-12-v2          bge-reranker-base
+conceptual          0.720 / 0.144 / 0.417   0.800 / 0.160 / 0.597
+exact (reranked)    0.588 / 0.467 / 0.789   0.730 / 0.565 / 0.896
+all (reranked)      0.599 / 0.441 / 0.759   0.735 / 0.532 / 0.872
+```
+
+`routed`'s exact-query numbers are identical between the two runs
+(0.892/0.710/1.000): the exact-match index backfill dominates there
+regardless of which reranker sits behind it, so this comparison could not
+have shown a difference in the one bucket where it matters least. Where it
+does show up is conceptual MRR: 0.597 versus 0.417, a real drop, not noise.
+General web-search training on a smaller model does not transfer to this
+corpus as well as BGE's retrieval-specific training does at this size,
+consistent with the base-beats-voyage-law-2 finding in Section 6: what a
+model is called and how many parameters it has predicts less here than
+what it was trained to do. `bge-reranker-base` stays the default.

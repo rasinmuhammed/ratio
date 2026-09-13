@@ -16,7 +16,7 @@ from rag.generate import get_llm
 from rag.hybrid import HybridRetriever
 from rag.hyde import HydeRetriever
 from rag.keyword import KeywordRetriever
-from rag.rerank import CrossEncoderReranker, RerankedRetriever
+from rag.rerank import DEFAULT_RERANKER, CrossEncoderReranker, RerankedRetriever
 from rag.route import RoutedRetriever
 
 INDEX_DIR = Path("data/index")
@@ -35,6 +35,18 @@ def main() -> None:
                              "one costs an LLM call per query, real spend "
                              "on a query set this size, not something to "
                              "pay for on every routine run.")
+    parser.add_argument("--reranker", type=str, default=None,
+                        help="use this cross-encoder instead of the default "
+                             "(BAAI/bge-reranker-base) for the reranked/"
+                             "routed configs. Deliberately a swap, not a "
+                             "second config loaded alongside the first: "
+                             "sentence-transformers/tokenizers reproducibly "
+                             "deadlocked in this process the moment a "
+                             "second CrossEncoder loaded after the first had "
+                             "already run, weights fully loaded, evaluation "
+                             "never starting, confirmed twice. Comparing "
+                             "candidates means two separate --reranker runs, "
+                             "not one run holding both models.")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.WARNING)
@@ -50,7 +62,8 @@ def main() -> None:
     # each config independently costs three of each, which at 414,122 chunks
     # is more memory than this machine has.
     hybrid = HybridRetriever(args.index)
-    reranker = CrossEncoderReranker()
+    reranker = (CrossEncoderReranker(model_name=args.reranker) if args.reranker
+                else CrossEncoderReranker())
 
     dense = hybrid.dense
 
@@ -63,7 +76,7 @@ def main() -> None:
         # there is a question about conceptual queries specifically, now
         # answerable: see the "conceptual" breakdown below, and --hyde.
         "reranked": RerankedRetriever(hybrid, reranker),
-        "routed": RoutedRetriever(hybrid, dense.payloads),
+        "routed": RoutedRetriever(RerankedRetriever(hybrid, reranker), dense.payloads),
     }
     if args.hyde:
         # Compared against "dense" specifically, not hybrid or reranked:
@@ -76,7 +89,8 @@ def main() -> None:
     kinds = present_kinds + (["all"] if len(present_kinds) > 1 else [])
     n_by_kind = {k: sum(1 for q in queries if q.kind == k) for k in present_kinds}
 
-    print(f"{len(queries)} queries ({n_by_kind}), k={args.k}\n")
+    print(f"{len(queries)} queries ({n_by_kind}), k={args.k}, "
+          f"reranker={args.reranker or DEFAULT_RERANKER}\n")
 
     # evaluate() once per searcher, not once per (searcher, kind): HyDE costs
     # a real LLM call per query, and summarise() already splits one run's
@@ -87,14 +101,17 @@ def main() -> None:
         for name, searcher in configs.items()
     }
 
+    # Widened from a fixed 14 once "reranked (candidate)" (20 chars) started
+    # truncating into the recall column instead of just padding past it.
+    name_width = max(14, max(len(name) for name in configs) + 1)
     for kind in kinds:
-        header = f"{'config':<14}{'recall':>9}{'precision':>11}{'MRR':>8}"
+        header = f"{'config':<{name_width}}{'recall':>9}{'precision':>11}{'MRR':>8}"
         print(f"-- {kind} --")
         print(header)
         print("-" * len(header))
         for name in configs:
             summary = summaries[name][kind]
-            print(f"{name:<14}{summary['recall']:>9.3f}"
+            print(f"{name:<{name_width}}{summary['recall']:>9.3f}"
                   f"{summary['precision']:>11.3f}{summary['mrr']:>8.3f}")
         print()
 
