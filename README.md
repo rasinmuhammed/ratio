@@ -1,5 +1,7 @@
 # Ratio
 
+[![tests](https://github.com/rasinmuhammed/rag-from-scratch/actions/workflows/test.yml/badge.svg)](https://github.com/rasinmuhammed/rag-from-scratch/actions/workflows/test.yml)
+
 A retrieval-augmented generation engine for Indian court judgments, built from scratch (no LangChain, no LlamaIndex) so that every retrieval and generation decision could actually be measured instead of assumed.
 
 The name comes from *ratio decidendi*, the part of a judgment that is the actual binding precedent, as opposed to *obiter* (things said in passing) or a party's own submissions. That distinction is the whole point of this project: a judgment records what counsel argued, what a lower court found, and what the court itself finally held, often in the same paragraph, and most of what people call "legal RAG" doesn't bother separating those before handing them to a language model.
@@ -87,6 +89,15 @@ The web UI is a Next.js app in `frontend/` that talks to the API server:
 uv run uvicorn rag.api:app --reload   # terminal 1
 cd frontend && npm install && npm run dev   # terminal 2
 ```
+
+## Deploying
+
+`.env.example` lists every environment variable the API server actually reads. The two that matter for a deploy target rather than local development:
+
+- `RATIO_INDEX_REPO`, a Hugging Face Hub dataset repo the server pulls the index from at startup if it isn't already on disk (`data/` is gitignored, so a fresh container starts with no index otherwise). Push one with `scripts/upload_index_to_hf.py`.
+- `RATIO_ALLOWED_ORIGINS`, the real frontend origin once you have one, instead of the wildcard CORS default that's fine for local development.
+
+`GET /health` returns `{"status": "ok", "chunks_indexed": N}` for whatever's hosting this to check the process is actually up. `/query`, `/stream` and `/agent_stream` are all rate-limited (20 requests per 5 minutes, shared, since they all draw from the same LLM provider quota), since a public link calling a paid API with no limit is a real cost, not a hypothetical one.
 
 ## Where to start reading
 
