@@ -17,7 +17,7 @@ export default function ArchitecturePage() {
   return (
     <div style={{ background: "var(--color-void)", minHeight: "100vh", display: "flex", flexDirection: "column", color: "var(--color-ivory)" }}>
       {/* Header */}
-      <header style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 50, background: "rgba(7,7,10,0.92)", backdropFilter: "blur(16px) saturate(1.4)", borderBottom: "1px solid var(--color-graphite-border)" }}>
+      <header style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 50, background: "rgba(7,7,10,0.92)", backdropFilter: "blur(16px) saturate(1.4)", WebkitBackdropFilter: "blur(16px) saturate(1.4)", borderBottom: "1px solid var(--color-graphite-border)" }}>
         <div className="ratio-container" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: "4.5rem" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "1.5rem" }}>
             <Link href="/" style={{ textDecoration: "none" }}><RatioWordmark size="sm" /></Link>

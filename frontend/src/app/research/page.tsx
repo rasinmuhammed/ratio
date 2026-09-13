@@ -183,6 +183,7 @@ export default function Home() {
                 minHeight: "6rem", // Increased from 4.5rem to make the box taller by default
                 background: "rgba(7, 7, 10, 0.6)",
                 backdropFilter: "blur(20px) saturate(1.5)",
+                WebkitBackdropFilter: "blur(20px) saturate(1.5)",
                 border: "1px solid var(--color-graphite-border)",
                 borderRadius: "1.25rem",
                 padding: "1rem 1.5rem",
@@ -311,7 +312,7 @@ export default function Home() {
                     }}
                     style={{
                       display: "flex", alignItems: "center", gap: "1rem", padding: "1rem 1.25rem",
-                      background: "rgba(20,20,25,0.4)", backdropFilter: "blur(12px)",
+                      background: "rgba(20,20,25,0.4)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
                       border: "1px solid var(--color-graphite-border)", borderRadius: "1rem",
                       cursor: "pointer", transition: "all 0.25s ease", textAlign: "left",
                       boxShadow: "inset 0 1px 0 rgba(255,255,255,0.02)"
