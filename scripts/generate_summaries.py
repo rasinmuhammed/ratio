@@ -34,6 +34,41 @@ SAC_SYSTEM = (
 
 _SUMMARY_RE = re.compile(r"<summary>(.*?)</summary>", re.S)
 
+# K2-Horizon reasons in plain prose, and on judgments where the supplied
+# excerpt cuts off before the actual holding, it sometimes ignores "do not
+# include any reasoning inside the <summary> tags" and thinks out loud
+# *inside* the tags instead of before them - the tags are present and the
+# regex matches cleanly, so this doesn't look like a parse failure, it looks
+# like a valid (if huge) summary. One instance ran to 71,747 characters of
+# internal monologue. Caught by content, not by the tags being there at all:
+# a real summary starts with the judgment's substance, not with the model
+# talking about the task.
+_REASONING_LEAK_PREFIXES = (
+    "we need", "need ", "let's ", "the user wants", "thus we need",
+    "tags,", "tags.", "we must", "okay,", "ok,",
+)
+# A real 2-3 sentence summary has never needed more than ~2000 characters
+# even for judgments with long case-number lists (verified against the
+# actual corpus); anything past this is reasoning, not a summary.
+MAX_SUMMARY_CHARS = 2500
+
+def _is_reasoning_leak(text: str) -> bool:
+    lowered = text.lstrip().lower()
+    if any(lowered.startswith(prefix) for prefix in _REASONING_LEAK_PREFIXES):
+        return True
+    if "no reasoning inside" in lowered:
+        return True
+    return len(text) > MAX_SUMMARY_CHARS
+
+def _extract_summary(reply: str) -> str | None:
+    match = _SUMMARY_RE.search(reply)
+    if not match:
+        return None
+    text = match.group(1).strip()
+    if not text or _is_reasoning_leak(text):
+        return None
+    return text
+
 def setup_db(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
@@ -49,11 +84,31 @@ def generate_summary(doc: Document, llm: LLM) -> str | None:
     # The start of a judgment almost always contains the facts, issue, and court.
     prompt = f"Judgment Text:\n{doc.text[:12000]}"
     reply = llm.complete(SAC_SYSTEM, prompt)
-    match = _SUMMARY_RE.search(reply)
-    if match:
-        return match.group(1).strip()
-    # Fallback if the model forgot the tags or got truncated
-    logging.warning("No <summary> tags found for %s (length %d)", doc.id, len(reply))
+    summary = _extract_summary(reply)
+    if summary:
+        return summary
+
+    # On longer/harder judgments K2-Horizon can spend its whole budget
+    # reasoning and never reach the closing tag. A run that finishes without
+    # crashing never retries a skipped doc (run_all_summaries.sh only resumes
+    # after a crash), so a doc that fails once here is gone for good unless
+    # we give it a second shot now. One retry at double the budget, only when
+    # the failure was actually truncation (last_finish_reason == "length"),
+    # recovers most of these without doubling cost on every call.
+    if getattr(llm, "last_finish_reason", None) == "length" and hasattr(llm, "max_tokens"):
+        original_max_tokens = llm.max_tokens
+        llm.max_tokens = original_max_tokens * 2
+        try:
+            reply = llm.complete(SAC_SYSTEM, prompt)
+            summary = _extract_summary(reply)
+            if summary:
+                return summary
+        finally:
+            llm.max_tokens = original_max_tokens
+
+    # Fallback if the model forgot the tags, reasoned inside them, or got
+    # truncated even after retry.
+    logging.warning("No usable <summary> found for %s (length %d)", doc.id, len(reply))
     return None
 
 def main() -> None:
