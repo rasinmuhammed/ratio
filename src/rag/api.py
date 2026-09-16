@@ -24,6 +24,7 @@ from rag.agent import LegalAgent
 from rag.audit import init_db, log_request, log_correction
 from rag.cache import SemanticCache
 from rag.corrective import corrective_answer
+from rag.expand import ParentExpandingRetriever
 from rag.generate import (
     CONTEXT_BUDGET, SYSTEM_PROMPT, answer, build_prompt, get_llm, parse_answer,
 )
@@ -71,7 +72,16 @@ async def lifespan(app: FastAPI):
     started = time.time()
     hybrid = HybridRetriever(INDEX_DIR)
     reranked = RerankedRetriever(hybrid, CrossEncoderReranker())
-    state.retriever = RoutedRetriever(reranked, hybrid.dense.payloads)
+    routed = RoutedRetriever(reranked, hybrid.dense.payloads)
+    # Small-to-big: ranking and reranking already happened above on the
+    # precise 450-token chunk; this only widens what the generator reads for
+    # each already-selected source, so it sits last in the chain. window=1
+    # is the same default scripts/audit_answers.py's --expand-context uses;
+    # this was implemented and tested against synthetic Results (2026-09-08)
+    # but never run through audit_answers.py's actual answer-quality audit
+    # the way HyDE was before being wired in, so treat it as provisional
+    # until that comparison exists, not as a measured win.
+    state.retriever = ParentExpandingRetriever(routed, hybrid.by_id, window=1)
     state.llm = get_llm()
     # hybrid.dense already carries the loaded bge-small model and its
     # normalisation settings, so the cache embeds queries the exact same

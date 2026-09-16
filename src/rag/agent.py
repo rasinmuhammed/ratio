@@ -15,6 +15,8 @@ from rag.generate import LLM, SYSTEM_PROMPT, CITE_REMINDER
 from rag.retrieve import Result
 from rag.stance import classify as stance_of
 from rag.graph import GraphDB
+from rag.treatment import DISTINGUISHED, OVERRULED, find_citations
+from rag.treatment_db import worst_treatment
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +26,8 @@ You have access to tools to search the legal database and submit your final answ
 If the user's question is complex, you must use the `search_index` tool multiple times to gather all necessary context.
 You also have the `explore_network` tool. Use it when you find a highly relevant case (using its chunk_id) and want to traverse the GraphRAG citation network to find related precedents, dissenting opinions, or connected rules.
 Once you have enough context, or if you cannot find any more relevant cases after 3 searches, you MUST use the `submit_final_answer` tool.
+
+A source's header may include a line starting "CAUTION:". That means a citation appearing in that source's text was found elsewhere in this corpus described as overruled or distinguished, checked automatically against every other document, not by reading this one passage. If your answer relies on a citation flagged that way, say so explicitly rather than presenting it as settled law, for example "X [3] held this, though a CAUTION note indicates it may have been overruled elsewhere". Do not repeat the CAUTION note if the source's own text was never actually used in your answer.
 
 CRITICAL INSTRUCTION:
 Every time you use a tool, you must write a `scratchpad`. This is your ONLY memory. The raw search results will be deleted to save space, so you MUST extract and write down any key quotes, citations, and rules you want to remember in your `scratchpad`.
@@ -118,6 +122,30 @@ class LegalAgent:
                         "no results: %s", exc)
             self.graph = None
 
+    def _treatment_warning(self, text: str) -> str:
+        """Cross-checks citations mentioned in this chunk against the
+        corpus-wide citation-treatment graph (scripts/build_treatment_graph.py).
+
+        This is deliberately not about how *this* chunk treats a citation,
+        stance_of already covers the local voice. It is about whether that
+        same citation was called into question *somewhere else* in the
+        corpus, which nothing about reading this one passage in isolation
+        could ever reveal. Degrades to no warnings, not an error, when
+        data/treatment.db has not been built (see graph.db's identical
+        situation above): a missing warning is a smaller failure than a
+        crash on every query on a machine that never ran the builder.
+        """
+        seen: set[str] = set()
+        flags = []
+        for citation in find_citations(text):
+            if citation.key in seen:
+                continue
+            seen.add(citation.key)
+            treatment = worst_treatment(citation.key)
+            if treatment in (OVERRULED, DISTINGUISHED):
+                flags.append(f"{citation.raw} ({treatment} elsewhere in this corpus)")
+        return "; ".join(flags)
+
     def format_search_results(self, results: list[Result]) -> str:
         """Format retrieved chunks exactly as generate.answer does.
 
@@ -140,9 +168,12 @@ class LegalAgent:
             meta = r.metadata
             court = meta.get("court", "Unknown Court")
             title = meta.get("title", "Unknown Title")
+            warning = self._treatment_warning(r.text)
+            warning_line = f"\nCAUTION: {warning}" if warning else ""
             context_parts.append(
                 f"--- Source [{index}] ({stance}) ---\n"
-                f"Court: {court} | Title: {title} | Cited by: {meta.get('cited_by', 0)}\n"
+                f"Court: {court} | Title: {title} | Cited by: {meta.get('cited_by', 0)}"
+                f"{warning_line}\n"
                 f"{r.text}\n"
             )
         return "\n".join(context_parts)

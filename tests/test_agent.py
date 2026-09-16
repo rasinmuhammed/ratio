@@ -103,3 +103,49 @@ def test_format_search_results_numbers_by_global_position_not_call_order():
     formatted = agent.format_search_results([second])
     assert "Source [2]" in formatted
     assert "Source [1]" not in formatted
+
+
+def test_treatment_caution_appears_when_a_cited_case_was_overruled_elsewhere(monkeypatch):
+    """The whole point of the treatment graph: a chunk that itself reads as
+    settled law can still cite a case this corpus records as overruled in a
+    different judgment, invisible from the chunk's own text alone."""
+    import rag.agent as agent_module
+
+    monkeypatch.setattr(
+        agent_module, "worst_treatment",
+        lambda key: "overruled" if key == "AIR 1978 SC 597" else None,
+    )
+    agent = LegalAgent(ScriptedChatLLM([]), retriever=FakeRetriever([]), k=6)
+    chunk = _chunk("doc-a#1", "The Court in AIR 1978 SC 597 held the right applies.")
+    agent.all_sources["doc-a#1"] = chunk
+
+    formatted = agent.format_search_results([chunk])
+    assert "CAUTION" in formatted
+    assert "AIR 1978 SC 597" in formatted
+    assert "overruled" in formatted
+
+
+def test_no_caution_line_when_no_citation_was_flagged(monkeypatch):
+    import rag.agent as agent_module
+
+    monkeypatch.setattr(agent_module, "worst_treatment", lambda key: None)
+    agent = LegalAgent(ScriptedChatLLM([]), retriever=FakeRetriever([]), k=6)
+    chunk = _chunk("doc-a#1", "The Court in AIR 1978 SC 597 held the right applies.")
+    agent.all_sources["doc-a#1"] = chunk
+
+    formatted = agent.format_search_results([chunk])
+    assert "CAUTION" not in formatted
+
+
+def test_no_caution_line_when_the_chunk_cites_nothing(monkeypatch):
+    import rag.agent as agent_module
+
+    monkeypatch.setattr(
+        agent_module, "worst_treatment", lambda key: "overruled",
+    )
+    agent = LegalAgent(ScriptedChatLLM([]), retriever=FakeRetriever([]), k=6)
+    chunk = _chunk("doc-a#1", "The petition is dismissed with costs.")
+    agent.all_sources["doc-a#1"] = chunk
+
+    formatted = agent.format_search_results([chunk])
+    assert "CAUTION" not in formatted

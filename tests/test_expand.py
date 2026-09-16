@@ -124,3 +124,12 @@ def test_k_and_kwargs_pass_through_to_inner_searcher():
     retriever.search("query", k=8, depth=40)
 
     assert inner.calls == [("query", 8, {"depth": 40})]
+
+
+def test_payloads_delegates_to_the_inner_retriever():
+    """api.py wires this into the live retriever chain, and /health reads
+    state.retriever.payloads for the served chunk count; this must not
+    hide that attribute now that something sits on top of it in production."""
+    inner = FakeSemantic([])
+    inner.payloads = [{"id": "a"}, {"id": "b"}]
+    assert len(ParentExpandingRetriever(inner, {}).payloads) == 2

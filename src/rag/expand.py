@@ -58,6 +58,14 @@ class ParentExpandingRetriever:
         self.by_id = by_id
         self.window = window
 
+    @property
+    def payloads(self) -> list[dict]:
+        # Added when api.py started wiring this into the live retriever
+        # chain (previously only scripts/audit_answers.py used it directly).
+        # /health reads state.retriever.payloads for the served chunk count;
+        # delegating keeps one source of truth rather than tracking a copy.
+        return self.inner.payloads
+
     def search(self, query: str, k: int = DEFAULT_K, **kwargs) -> list[Result]:
         return [self._expand(r) for r in self.inner.search(query, k=k, **kwargs)]
 
