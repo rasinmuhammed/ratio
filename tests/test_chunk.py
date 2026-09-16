@@ -1,9 +1,14 @@
+import pytest
+
 from rag.chunk import (
+    MIN_CHUNK_SIZE,
     OVERLAP_CHARS,
+    TARGET_SIZE,
     _hard_split,
     _overlap_tail,
     _split_numbered,
     chunk_document,
+    context_prefix,
 )
 from rag.ingest import Document
 
@@ -67,3 +72,47 @@ def test_chunk_is_immutable():
     except AttributeError:
         return
     raise AssertionError("Chunk should be frozen")
+
+def test_oversized_summary_falls_back_to_header_only_prefix():
+    """Measured on the full corpus: a document whose own text is mostly a
+    list of citations (a consolidated cause-list order) produces a SAC
+    summary that is itself citation-dense and can overflow the chunk budget
+    on its own, even though the base header (court, title, case number) is
+    always short. Dropping just the summary should let chunking succeed
+    rather than crashing a corpus-wide reindex over one atypical source."""
+    doc = Document(
+        id="d", text="word " * 2000,
+        metadata={"court": "C", "title": "T",
+                  "doc_summary": "x" * (TARGET_SIZE * 2)},
+    )
+    chunks = list(chunk_document(doc))
+    assert chunks
+    assert "Summary:" not in chunks[0].text
+
+
+def test_summary_is_used_when_it_actually_fits():
+    doc = Document(
+        id="d", text="word " * 2000,
+        metadata={"court": "C", "title": "T", "doc_summary": "A short summary."},
+    )
+    chunks = list(chunk_document(doc))
+    assert "Summary: A short summary." in chunks[0].text
+
+
+def test_pathologically_long_header_with_no_summary_still_raises():
+    """The fallback only has a header to fall back to; if that alone
+    overflows the budget there is nothing left to drop, and raising is the
+    correct, honest failure rather than silently truncating case metadata."""
+    doc = Document(
+        id="d", text="word " * 2000,
+        metadata={"court": "C" * (TARGET_SIZE * 2), "title": "T"},
+    )
+    with pytest.raises(ValueError, match="Context prefix too long"):
+        list(chunk_document(doc))
+
+
+def test_context_prefix_include_summary_false_omits_it():
+    doc = Document(id="d", text="text",
+                    metadata={"court": "C", "title": "T", "doc_summary": "S"})
+    assert "Summary" not in context_prefix(doc, include_summary=False)
+    assert "Summary: S" in context_prefix(doc)

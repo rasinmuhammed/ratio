@@ -41,15 +41,19 @@ def _case_number(text: str) -> str:
     m = _CASE_NO.search(text[:3000])
     return m.group(0).strip() if m else ""
 
-def context_prefix(doc: Document) -> str:
-    """Identifiers that appear only in the header, attached to every chunk."""
+def context_prefix(doc: Document, include_summary: bool = True) -> str:
+    """Identifiers that appear only in the header, attached to every chunk.
+
+    `include_summary=False` is chunk_document()'s fallback for the rare
+    document whose SAC summary alone overflows the chunk budget (see there).
+    """
     parts = [doc.metadata.get("court") or "", doc.metadata.get("title") or ""]
     case_no = _case_number(doc.text)
     if case_no:
         parts.append(case_no)
-    
+
     header = " | ".join( p for p in parts if p)
-    summary = doc.metadata.get("doc_summary")
+    summary = doc.metadata.get("doc_summary") if include_summary else None
     if summary:
         return f"{header}\n\nSummary: {summary}"
     return header
@@ -195,6 +199,19 @@ def chunk_document(
 
     prefix = context_prefix(doc) if add_context else ""
     budget = size - (length(prefix) + 2 if prefix else 0)
+
+    # Measured on the full corpus: exactly one document out of 10,588 hits
+    # this, a consolidated cause-list order (dozens of case numbers) whose
+    # SAC summary is itself a list of citations, which tokenizes far more
+    # densely than prose (421 of a 450-token budget on its own). A single
+    # atypical source should not be able to crash a corpus-wide reindex, so
+    # the summary is dropped and the base header (court, title, case number,
+    # always short) is retried before giving up. If even that overflows, the
+    # document itself is the problem, not the summary, and raising is right.
+    if add_context and budget < min_size and doc.metadata.get("doc_summary"):
+        prefix = context_prefix(doc, include_summary=False)
+        budget = size - (length(prefix) + 2 if prefix else 0)
+
     if budget < min_size:
         raise ValueError(f"Context prefix too long for size={size}")
 
