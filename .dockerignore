@@ -1,0 +1,23 @@
+# The index, summaries.db, treatment.db etc. are pulled or built at
+# runtime (ensure_index at startup, the graph/treatment builders as one-off
+# scripts), never baked into the image, so shipping data/ would just make
+# every build slower and every image bigger for no benefit.
+data/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Frontend deploys separately (Vercel), not part of this image at all.
+frontend/
+
+.git/
+.github/
+tests/
+scripts/
+notebooks/
+# README.md is deliberately NOT excluded here: pyproject.toml declares
+# readme = "README.md", and hatchling reads that file during `uv sync`'s
+# build of this project's own package metadata. Excluding it breaks the
+# build with a much less obvious error than this comment.
