@@ -1,6 +1,9 @@
 # Backend only. The frontend deploys separately (Vercel); this image serves
-# the FastAPI app that frontend calls, on the port Hugging Face Spaces'
-# Docker SDK expects (7860).
+# the FastAPI app that frontend calls. Defaults to port 7860 (Hugging Face
+# Spaces' Docker SDK convention) but reads $PORT at container start, since
+# Cloud Run injects its own (typically 8080) and overriding the ENV below
+# rather than baking in one platform's port keeps this image portable
+# between the two without a second Dockerfile.
 FROM python:3.12-slim
 
 # Layer-cache the dependency install separately from the source, so an edit
@@ -46,4 +49,8 @@ EXPOSE 7860
 # memory (state.retriever et al. in api.py's lifespan); a second worker would
 # load its own full copy of every model and the index rather than sharing
 # any of it, the wrong trade on a free CPU tier's RAM budget.
-CMD ["uv", "run", "uvicorn", "rag.api:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1"]
+#
+# Shell form (not exec-form JSON) deliberately: $PORT only expands through a
+# shell, and Cloud Run sets that env var at container start, after this
+# image was built, so it cannot be baked in as a literal at build time.
+CMD uv run uvicorn rag.api:app --host 0.0.0.0 --port ${PORT:-7860} --workers 1
