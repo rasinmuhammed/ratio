@@ -156,6 +156,7 @@ function buildPath(from: DiagNode, to: DiagNode): string {
 
 export function RagArchitectureDiagram() {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const infoPanelRef = useRef<HTMLDivElement>(null);
   const [activeId, setActiveId] = useState<string>("router");
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -199,6 +200,10 @@ export function RagArchitectureDiagram() {
     const pos = getNodePos(node);
     const target = pos.x + NODE_W / 2 - el.clientWidth / 2;
     el.scrollTo({ left: Math.max(0, target), behavior: "smooth" });
+    // Scroll the info panel into view so the user sees the explanation
+    setTimeout(() => {
+      infoPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 80);
   }, []);
 
   const step = useCallback((dir: 1 | -1) => {
@@ -442,7 +447,7 @@ export function RagArchitectureDiagram() {
       </div>
 
       {/* ─── BOTTOM: FIXED INFO PANEL ─── */}
-      <div style={{ height: "260px", background: "var(--color-void)", position: "relative", zIndex: 20 }}>
+      <div ref={infoPanelRef} className="architecture-diagram-info" style={{ height: "260px", background: "var(--color-void)", position: "relative", zIndex: 20 }}>
         <AnimatePresence mode="wait">
           <motion.div
             key={activeId}
@@ -450,7 +455,7 @@ export function RagArchitectureDiagram() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.2 }}
-            style={{ width: "100%", maxWidth: "1200px", margin: "0 auto", padding: "2rem", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "3rem", height: "100%" }}
+            className="architecture-info-panel" style={{ width: "100%", maxWidth: "1200px", margin: "0 auto", padding: "2rem", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "3rem", height: "100%" }}
           >
             {/* Left Col: Title & Desc */}
             <div style={{ display: "flex", flexDirection: "column", justifyContent: "center" }}>

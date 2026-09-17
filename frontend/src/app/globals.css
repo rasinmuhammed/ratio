@@ -593,3 +593,149 @@ body::after {
   transform: translateY(-3px) scale(1.05);
   box-shadow: 0 4px 12px rgba(50,86,150,0.4);
 }
+
+/* ═══════════════════════════════════════════════
+   MOBILE RESPONSIVENESS — full site
+   ═══════════════════════════════════════════════ */
+
+/* ── Research workspace ── */
+.research-layout {
+  display: flex;
+  flex-direction: row;
+  gap: 0;
+  width: 100%;
+  height: 100%;
+}
+
+@media (max-width: 900px) {
+  .research-layout {
+    flex-direction: column;
+  }
+}
+
+/* ── Hero nav: hide text links on mobile ── */
+@media (max-width: 640px) {
+  .header-nav-links { display: none !important; }
+  .header-nav-cta span:first-child { display: none; }
+  .header-nav-cta span:last-child { margin: 0; }
+}
+
+/* ── RatioDecidendiSection: single column on mobile ── */
+@media (max-width: 768px) {
+  .ratio-decidendi-grid {
+    grid-template-columns: 1fr !important;
+    gap: 2.5rem !important;
+  }
+}
+
+/* ── Hero section: tighter padding ── */
+@media (max-width: 640px) {
+  .hero-eyebrow { display: none; }
+  .hero-ctas { flex-direction: column !important; gap: 0.875rem !important; }
+  .hero-ctas a { width: 100%; justify-content: center !important; }
+  .hero-metrics { display: none !important; }
+}
+
+/* ── Architecture diagram: compact on mobile ── */
+@media (max-width: 768px) {
+  .architecture-diagram-container {
+    height: auto !important;
+    min-height: 420px;
+  }
+  .architecture-info-panel {
+    height: auto !important;
+    min-height: 240px;
+    grid-template-columns: 1fr !important;
+    gap: 1.5rem !important;
+  }
+  .architecture-info-panel-left,
+  .architecture-info-panel-right {
+    padding: 1.25rem !important;
+  }
+}
+
+/* ── Corpus grid: single column on mobile ── */
+@media (max-width: 768px) {
+  .corpus-grid {
+    grid-template-columns: 1fr !important;
+    gap: 2rem !important;
+  }
+}
+
+/* ── Section spacing ── */
+@media (max-width: 640px) {
+  .ratio-section {
+    padding-top: 4rem !important;
+    padding-bottom: 4rem !important;
+  }
+  .ratio-section-title {
+    font-size: 1.75rem !important;
+  }
+  .cta-section {
+    padding: 5rem 0 !important;
+  }
+  .cta-title {
+    font-size: 2rem !important;
+  }
+}
+
+/* ── Research page: stack panels vertically on mobile ── */
+@media (max-width: 900px) {
+  .research-workspace {
+    flex-direction: column !important;
+    height: auto !important;
+    min-height: calc(100vh - 80px);
+  }
+  .research-answer-col {
+    width: 100% !important;
+    min-width: unset !important;
+    border-right: none !important;
+    border-bottom: 1px solid var(--color-graphite-border);
+  }
+  .research-evidence-col {
+    width: 100% !important;
+    min-width: unset !important;
+    height: 60vh;
+  }
+}
+
+/* ── Innovations grid: single column on very small screens ── */
+@media (max-width: 480px) {
+  .innovations-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ── Innovation cards: less padding ── */
+@media (max-width: 640px) {
+  .innovation-card-body { padding: 1.25rem !important; }
+  .innovation-card-metric { padding: 1rem 1.25rem !important; }
+}
+
+/* ── Footer: stack on mobile ── */
+@media (max-width: 640px) {
+  .footer-inner {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 1rem !important;
+  }
+}
+
+/* ── General tap target size ── */
+@media (max-width: 768px) {
+  button, a {
+    min-height: 44px;
+  }
+}
+
+/* ── Architecture diagram: mobile info panel ── */
+@media (max-width: 768px) {
+  .architecture-diagram-info {
+    height: auto !important;
+  }
+  .architecture-info-panel {
+    grid-template-columns: 1fr !important;
+    height: auto !important;
+    padding: 1.5rem !important;
+  }
+}

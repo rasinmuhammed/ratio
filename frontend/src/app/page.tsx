@@ -72,7 +72,7 @@ function HeaderNav() {
             <span className="label-tag" style={{ color: "var(--color-parchment)", fontSize: "10px" }}>INDEX LIVE · 580K CHUNKS</span>
           </div>
         </div>
-        <nav style={{ display: "flex", alignItems: "center", gap: "2rem" }}>
+        <nav className="header-nav-links" style={{ display: "flex", alignItems: "center", gap: "2rem" }}>
           {["Architecture", "Innovations", "Corpus"].map((label) => (
             <a key={label} href={`#${label.toLowerCase()}`} style={{ fontSize: "0.7rem", textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--color-fog)", textDecoration: "none", transition: "color 0.2s ease" }} onMouseEnter={(e) => (e.currentTarget.style.color = "var(--color-ivory)")} onMouseLeave={(e) => (e.currentTarget.style.color = "var(--color-fog)")}>{label}</a>
           ))}
@@ -149,7 +149,7 @@ function RatioDecidendiSection() {
   return (
     <section id="ratio-decidendi" className="ratio-section" style={{ borderTop: "1px solid var(--color-graphite-border)" }}>
       <div className="ratio-container">
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "5rem", alignItems: "start" }}>
+        <div className="ratio-decidendi-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "5rem", alignItems: "start" }}>
           <FadeIn>
             <span className="ratio-section-label" style={{ color: "var(--color-gold)" }}>WHAT IS RATIO DECIDENDI?</span>
             <h2 style={{ fontFamily: "var(--font-serif)", fontWeight: 300, fontSize: "clamp(1.75rem, 3vw, 2.75rem)", lineHeight: 1.15, color: "var(--color-ivory)", margin: "1.25rem 0 1.5rem" }}>

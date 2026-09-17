@@ -420,10 +420,10 @@ export default function Home() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ duration: 0.4 }}
-            style={{ display: "flex", width: "100%", height: "100%" }}
+            className="research-workspace" style={{ display: "flex", width: "100%", height: "100%" }}
           >
             {/* LEFT: Answer Canvas */}
-            <div style={{ display: "flex", flexDirection: "column", width: "55%", minWidth: 0, flexShrink: 0, height: "100%", borderRight: "1px solid var(--color-graphite-border)" }}>
+            <div className="research-answer-col" style={{ display: "flex", flexDirection: "column", width: "55%", minWidth: 0, flexShrink: 0, height: "100%", borderRight: "1px solid var(--color-graphite-border)" }}>
               {/* Top bar */}
               <div style={{ display: "flex", alignItems: "center", gap: "1rem", padding: "1.25rem 2rem", borderBottom: "1px solid var(--color-graphite-border)" }}>
                 <RatioWordmark size="sm" />
@@ -515,7 +515,7 @@ export default function Home() {
               initial={{ x: 60, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
               transition={{ type: "spring", stiffness: 400, damping: 30, delay: 0.1 }}
-              style={{ display: "flex", flexDirection: "column", width: "45%", minWidth: 0, flexShrink: 0, height: "100%", background: "var(--color-obsidian)" }}
+              className="research-evidence-col" style={{ display: "flex", flexDirection: "column", width: "45%", minWidth: 0, flexShrink: 0, height: "100%", background: "var(--color-obsidian)" }}
             >
               <EvidencePanel
                 sources={sources}
