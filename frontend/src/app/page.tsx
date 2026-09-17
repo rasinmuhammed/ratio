@@ -27,15 +27,15 @@ const PIPELINE_STEPS = [
 
 const INNOVATIONS = [
   { tag: "SAC", title: "Summary-Augmented Chunking", body: "Every 450-token chunk is automatically prefixed with a machine-generated 3-sentence summary of its parent judgment - preserving the core issue, ruling, and context in every vector embedding. Chunk size was chosen for defensible reasons; it has not itself been swept against the label set, which is recorded rather than implied.", metric: "450 Tokens", metricLabel: "Tokens Per Chunk (SAC-Prefixed)" },
-  { tag: "CS-BM25", title: "Case-Sensitive Tokenisation", body: "Standard LLM tokenizers lowercase all text, destroying citation sensitivity ('AIR' → 'air', 'CrPC' → 'crpc'). Ratio indexes each identifier twice: once atomic and case-preserved, once split into lowercase words, so exact and topical matching share one postings list.", metric: "414,122", metricLabel: "Chunks In The Full Corpus" },
+  { tag: "CS-BM25", title: "Case-Sensitive Tokenisation", body: "Standard LLM tokenizers lowercase all text, destroying citation sensitivity ('AIR' → 'air', 'CrPC' → 'crpc'). Ratio indexes each identifier twice: once atomic and case-preserved, once split into lowercase words, so exact and topical matching share one postings list.", metric: "580,939", metricLabel: "Chunks In The Full Corpus" },
   { tag: "SCO", title: "Enforced Citation Schema", body: "Generation prompts enforce a strict JSON output schema. A claim without a source ID cannot be emitted at all, measured at 0% uncited claims and 91.2% citation precision on a 15-query structured-output benchmark - the schema forces attribution, it does not by itself guarantee the citation is right.", metric: "0%", metricLabel: "Uncited Claims (Structured Output)" },
 ];
 
 const STATS = [
   { value: "10,588", label: "Indian Court Judgments" },
-  { value: "414,122", label: "Indexed Context Chunks" },
-  { value: "23B active", label: "Inference Model (375B total, MoE)" },
-  { value: "92.5%", label: "Exact-Citation Recall (Measured)" },
+  { value: "580,939", label: "Indexed Context Chunks" },
+  { value: "IFM K2-Horizon", label: "Inference LLM (375B MoE)" },
+  { value: "73.5%", label: "Recall@5 (Measured, 313 Labels)" },
 ];
 
 const COURT_ROWS = [
@@ -69,7 +69,7 @@ function HeaderNav() {
           <RatioWordmark size="sm" />
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.25rem 0.75rem", borderRadius: "9999px", border: "1px solid var(--color-graphite-border)", background: "var(--color-graphite-deep)" }}>
             <span style={{ width: "0.5rem", height: "0.5rem", borderRadius: "9999px", background: "var(--color-emerald-bright)", display: "inline-block" }} />
-            <span className="label-tag" style={{ color: "var(--color-parchment)", fontSize: "10px" }}>INDEX LIVE · 414K CHUNKS</span>
+            <span className="label-tag" style={{ color: "var(--color-parchment)", fontSize: "10px" }}>INDEX LIVE · 580K CHUNKS</span>
           </div>
         </div>
         <nav style={{ display: "flex", alignItems: "center", gap: "2rem" }}>
@@ -126,6 +126,61 @@ function HeroSection() {
   );
 }
 
+
+function RatioDecidendiSection() {
+  const POINTS = [
+    {
+      label: "NOT the outcome",
+      body: "Whether the appeal was allowed or dismissed is the dispositio. It is not the ratio. Two cases can have identical ratios and opposite outcomes.",
+      color: "var(--color-rust)",
+    },
+    {
+      label: "NOT the judge's commentary",
+      body: "Obiter dicta are observations made in passing. Persuasive in future courts, but not binding. Retrieving them as holdings is a structural error.",
+      color: "var(--color-gold-dim)",
+    },
+    {
+      label: "The binding legal principle",
+      body: "The ratio is the rule the court articulates as the basis of its decision. Under Article 141, every Supreme Court ratio binds all courts in India. This is what Ratio retrieves.",
+      color: "var(--color-emerald-bright)",
+    },
+  ];
+
+  return (
+    <section id="ratio-decidendi" className="ratio-section" style={{ borderTop: "1px solid var(--color-graphite-border)" }}>
+      <div className="ratio-container">
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "5rem", alignItems: "start" }}>
+          <FadeIn>
+            <span className="ratio-section-label" style={{ color: "var(--color-gold)" }}>WHAT IS RATIO DECIDENDI?</span>
+            <h2 style={{ fontFamily: "var(--font-serif)", fontWeight: 300, fontSize: "clamp(1.75rem, 3vw, 2.75rem)", lineHeight: 1.15, color: "var(--color-ivory)", margin: "1.25rem 0 1.5rem" }}>
+              The reason<br />for the decision.
+            </h2>
+            <p style={{ color: "var(--color-fog)", fontSize: "1rem", lineHeight: 1.8, fontWeight: 300, marginBottom: "1.5rem" }}>
+              Latin for the legal principle a court articulates when deciding a case. Not the outcome. Not the commentary. The rule that future courts are bound to follow.
+            </p>
+            <p style={{ color: "var(--color-fog)", fontSize: "1rem", lineHeight: 1.8, fontWeight: 300 }}>
+              Under Article 141 of the Indian Constitution, any ratio declared by the Supreme Court is law across the entire country. This product is named after the thing it actually retrieves.
+            </p>
+          </FadeIn>
+          <FadeIn delay={0.2}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+              {POINTS.map((p, i) => (
+                <div key={i} style={{ padding: "1.5rem", borderRadius: "0.875rem", border: "1px solid var(--color-graphite-border)", background: "var(--color-graphite-deep)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.625rem", marginBottom: "0.75rem" }}>
+                    <span style={{ width: "0.5rem", height: "0.5rem", borderRadius: "9999px", background: p.color, flexShrink: 0 }} />
+                    <span style={{ fontSize: "0.6875rem", fontWeight: 600, letterSpacing: "0.12em", textTransform: "uppercase" as const, color: p.color, fontFamily: "var(--font-mono)" }}>{p.label}</span>
+                  </div>
+                  <p style={{ fontSize: "0.9rem", color: "var(--color-fog)", lineHeight: 1.7, margin: 0 }}>{p.body}</p>
+                </div>
+              ))}
+            </div>
+          </FadeIn>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function EditorialSection() {
   return (
     <section className="ratio-section">
@@ -149,7 +204,7 @@ function EditorialSection() {
               <span className="label-tag" style={{ color: "var(--color-ivory)" }}>RATIO PRINCIPLE</span>
             </div>
             <p style={{ fontSize: "0.875rem", color: "var(--color-parchment)", lineHeight: 1.7 }}>
-              Disambiguating counsel submission from binding judicial ratio is not an aesthetic preference - it is a structural legal requirement.
+              Disambiguating counsel submission from binding judicial ratio is not an aesthetic preference - it is a structural legal requirement. Ratio\'s stance detection is built around this distinction.
             </p>
           </div>
         </FadeIn>
@@ -247,7 +302,7 @@ function CorpusSection() {
             <p style={{ color: "var(--color-parchment)", fontSize: "1rem", lineHeight: 1.75, marginBottom: "1.5rem" }}>
               Built over the Hugging Face{" "}
               <a href="https://huggingface.co/datasets/opennyaiorg/InJudgements_dataset" target="_blank" rel="noopener noreferrer" style={{ color: "var(--color-gold)", textDecoration: "underline", textUnderlineOffset: "4px" }}>OpenNyAI InJudgements dataset</a>
-              . Supreme Court of India, High Courts, and Tribunals - pre-processed into a 414,122-chunk hybrid search index.
+              . Supreme Court of India, High Courts, and Tribunals - pre-processed into a 580,939-chunk hybrid search index.
             </p>
             <p style={{ color: "var(--color-fog)", fontSize: "0.875rem", lineHeight: 1.75 }}>Every chunk carries parent metadata, tribunal tier weight, and full case citations to prevent context dilution during generation.</p>
           </FadeIn>
@@ -316,6 +371,7 @@ export default function LandingPage() {
     <div style={{ background: "var(--color-void)", minHeight: "100vh", color: "var(--color-ivory)" }}>
       <HeaderNav />
       <HeroSection />
+      <RatioDecidendiSection />
       <EditorialSection />
       <ArchitectureSection />
       <InnovationsSection />

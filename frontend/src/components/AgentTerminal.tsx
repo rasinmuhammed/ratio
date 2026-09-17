@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Terminal, Database, BrainCircuit, CheckCircle2, AlertTriangle, ChevronRight } from "lucide-react";
 
@@ -6,6 +6,42 @@ export interface AgentThought {
   id: string;
   type: "scratchpad" | "search" | "status" | "error";
   content: string;
+}
+
+
+function PanelTooltip({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: "relative", display: "inline-flex", marginLeft: "0.5rem" }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-label="Learn about Autonomous Engine"
+        style={{
+          width: "16px", height: "16px", borderRadius: "50%",
+          border: "1px solid rgba(255,255,255,0.12)",
+          background: "transparent", color: "rgba(255,255,255,0.3)",
+          fontSize: "9px", fontWeight: 600, cursor: "pointer",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          flexShrink: 0,
+        }}
+      >
+        ?
+      </button>
+      {open && (
+        <div style={{
+          position: "absolute", bottom: "calc(100% + 8px)", left: 0,
+          zIndex: 100, width: "260px", padding: "1rem",
+          background: "#09090b",
+          border: "1px solid rgba(255,255,255,0.08)",
+          borderRadius: "0.75rem",
+          boxShadow: "0 16px 48px -8px rgba(0,0,0,0.9)",
+        }}>
+          <p style={{ fontSize: "0.8rem", color: "rgba(160,159,149,0.9)", lineHeight: 1.65, margin: 0 }}>{text}</p>
+          <button onClick={() => setOpen(false)} style={{ position: "absolute", top: "8px", right: "10px", background: "none", border: "none", color: "rgba(107,106,96,0.8)", cursor: "pointer", fontSize: "12px" }}>x</button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function AgentTerminal({ thoughts }: { thoughts: AgentThought[] }) {
@@ -42,9 +78,10 @@ export function AgentTerminal({ thoughts }: { thoughts: AgentThought[] }) {
           <Terminal size={12} className="text-[var(--color-emerald)]" />
         </div>
         <div className="flex flex-col">
-          <span className="text-[0.65rem] font-medium font-sans text-[var(--color-ivory)] uppercase tracking-[0.2em] leading-none mb-1">
-            Autonomous Engine
-          </span>
+          <div style={{ display: "flex", alignItems: "center" }}>
+            <span className="text-[0.65rem] font-medium font-sans text-[var(--color-ivory)] uppercase tracking-[0.2em] leading-none">Autonomous Engine</span>
+            <PanelTooltip text="A multi-turn reasoning agent that decomposes your query, searches the index up to 5 times, traverses the GraphRAG citation network for connected precedents, and synthesizes a final answer only when it has sufficient grounded context. Every claim is attributed to a retrieved passage." />
+          </div>
           <span className="text-[0.6rem] font-mono text-[var(--color-ash)] uppercase tracking-wider leading-none flex items-center gap-1.5">
             <span className="relative flex h-1.5 w-1.5">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--color-emerald)] opacity-75"></span>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import React, { useState, useRef, useCallback, useEffect } from "react";
 import { AnimatePresence, motion, useMotionValue, useSpring } from "framer-motion";
 import { SearchIcon, Landmark, Scale, ScrollText, Shield } from "lucide-react";
 
@@ -20,6 +20,50 @@ interface SourceMeta {
 }
 
 type AppState = "idle" | "searching" | "complete";
+
+
+function InfoTooltip({ title, body }: { title: string; body: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: "relative", display: "inline-flex" }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-label={`Learn about ${title}`}
+        style={{
+          width: "18px", height: "18px", borderRadius: "50%",
+          border: "1px solid var(--color-graphite-mid)",
+          background: "transparent", color: "var(--color-ash)",
+          fontSize: "10px", fontWeight: 600, cursor: "pointer",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          lineHeight: 1, flexShrink: 0,
+          transition: "border-color 0.15s ease, color 0.15s ease",
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--color-gold-dim)"; e.currentTarget.style.color = "var(--color-gold)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--color-graphite-mid)"; e.currentTarget.style.color = "var(--color-ash)"; }}
+      >
+        ?
+      </button>
+      {open && (
+        <div
+          style={{
+            position: "absolute", bottom: "calc(100% + 8px)", left: "50%",
+            transform: "translateX(-50%)", zIndex: 100,
+            width: "260px", padding: "1rem",
+            background: "var(--color-obsidian)", border: "1px solid var(--color-graphite-border)",
+            borderRadius: "0.75rem",
+            boxShadow: "0 16px 48px -8px rgba(0,0,0,0.8)",
+          }}
+        >
+          <p style={{ fontSize: "0.6875rem", fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-gold)", fontFamily: "var(--font-mono)", marginBottom: "0.5rem" }}>
+            {title}
+          </p>
+          <p style={{ fontSize: "0.8125rem", color: "var(--color-fog)", lineHeight: 1.65, margin: 0 }}>{body}</p>
+          <button onClick={() => setOpen(false)} style={{ position: "absolute", top: "8px", right: "10px", background: "none", border: "none", color: "var(--color-ash)", cursor: "pointer", fontSize: "14px", lineHeight: 1 }}>x</button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Home() {
   const [query, setQuery] = useState("");

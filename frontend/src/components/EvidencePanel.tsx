@@ -2,6 +2,7 @@
 
 import { motion, AnimatePresence } from "framer-motion";
 import { ExternalLink } from "lucide-react";
+import { useState } from "react";
 
 interface SourceMeta {
   index: number;
@@ -202,15 +203,52 @@ function SkeletonCard({ delay }: { delay: number }) {
   );
 }
 
+
+function PanelTooltip({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: "relative", display: "inline-flex" }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-label="Learn about this panel"
+        style={{
+          width: "16px", height: "16px", borderRadius: "50%",
+          border: "1px solid var(--color-graphite-mid)",
+          background: "transparent", color: "var(--color-ash)",
+          fontSize: "9px", fontWeight: 600, cursor: "pointer",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          flexShrink: 0,
+        }}
+      >
+        ?
+      </button>
+      {open && (
+        <div style={{
+          position: "absolute", bottom: "calc(100% + 8px)", right: 0,
+          zIndex: 100, width: "240px", padding: "1rem",
+          background: "var(--color-obsidian)",
+          border: "1px solid var(--color-graphite-border)",
+          borderRadius: "0.75rem",
+          boxShadow: "0 16px 48px -8px rgba(0,0,0,0.8)",
+        }}>
+          <p style={{ fontSize: "0.8rem", color: "var(--color-fog)", lineHeight: 1.65, margin: 0 }}>{text}</p>
+          <button onClick={() => setOpen(false)} style={{ position: "absolute", top: "8px", right: "10px", background: "none", border: "none", color: "var(--color-ash)", cursor: "pointer", fontSize: "12px" }}>x</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function EvidencePanel({ sources, isLoading, sourceCount }: Props) {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       {/* Panel header */}
       <div style={{ padding: "1.25rem 1.75rem", borderBottom: "1px solid var(--color-graphite-border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
-          <h2 style={{ fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.2em", fontWeight: 600, color: "var(--color-fog)", margin: 0 }}>
-            Evidence Stack
-          </h2>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <h2 style={{ fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.2em", fontWeight: 600, color: "var(--color-fog)", margin: 0 }}>Evidence Stack</h2>
+            <PanelTooltip text="Retrieved case law ranked by judicial authority tier (Supreme Court 1.0x, High Courts 0.75x, Tribunals 0.5x). Each card shows the binding weight of the citation, its stance label (HOLDING vs DICTA), and how many times it has been cited by other judgments in the corpus." />
+          </div>
         </div>
         <AnimatePresence>
           {sourceCount > 0 && (
