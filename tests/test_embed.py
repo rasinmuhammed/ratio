@@ -7,6 +7,30 @@ from rag.chunk import Chunk
 from rag.embed import build_index, load_index, load_model, token_length
 
 
+class FakeTokenizer:
+    def encode(self, text, add_special_tokens=True):
+        return text.split()  # word count stands in for token count
+
+
+class FakeModel:
+    """Enough of SentenceTransformer's surface for build_index() to run
+    without loading real weights, so the checkpoint/resume mechanics (the
+    part actually under test here) run in the normal fast suite rather than
+    behind -m model."""
+
+    def __init__(self, dim: int = 3, max_seq_length: int = 1000):
+        self.max_seq_length = max_seq_length
+        self.tokenizer = FakeTokenizer()
+        self._dim = dim
+
+    def get_embedding_dimension(self) -> int:
+        return self._dim
+
+    def encode(self, texts, batch_size=64, normalize_embeddings=True,
+               show_progress_bar=False):
+        return np.zeros((len(texts), self._dim), dtype=np.float32)
+
+
 def _write_index(path, ids, vectors, dim=3):
     path.mkdir(parents=True, exist_ok=True)
     np.save(path / "vectors-0000.npy", np.array(vectors, dtype=np.float32))
@@ -92,3 +116,113 @@ def test_build_index_counts_truncation(tmp_path):
     chunks = [Chunk(id="d#0", doc_id="d", text=long_text, index=0, metadata={})]
     meta = build_index(chunks, out_dir=tmp_path / "index")
     assert meta["truncated"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Resumability: a crash partway through a corpus-wide build must not force
+# re-embedding chunks whose vectors are already safely on disk.
+# ---------------------------------------------------------------------------
+
+
+def _chunks(n):
+    return [Chunk(id=f"d#{i}", doc_id="d", text=f"chunk number {i}",
+                  index=i, metadata={}) for i in range(n)]
+
+
+class Boom(Exception):
+    pass
+
+
+def _crashing_stream(items, crash_at):
+    for i, item in enumerate(items):
+        if i == crash_at:
+            raise Boom()
+        yield item
+
+
+def test_resumed_run_never_reembeds_a_completed_shard():
+    """The whole point: chunks already backed by a flushed shard must be
+    skipped, not passed to encode() again, on the resumed call."""
+
+    class CountingModel(FakeModel):
+        def __init__(self):
+            super().__init__()
+            self.encoded_texts: list[str] = []
+
+        def encode(self, texts, **kw):
+            self.encoded_texts.extend(texts)
+            return super().encode(texts, **kw)
+
+    def run(tmp_path):
+        idx = tmp_path / "idx"
+        chunks = _chunks(10)
+        model = CountingModel()
+        with pytest.raises(Boom):
+            build_index(_crashing_stream(chunks, crash_at=7), out_dir=idx,
+                        model=model, shard_size=3)
+        # Shards 0 and 1 (chunks 0-2, 3-5) flush and checkpoint before the
+        # crash at index 7; chunk 6 was consumed into the third, never
+        # flushed shard buffer and must not count as done.
+        checkpoint = json.loads((idx / ".checkpoint.json").read_text())
+        assert checkpoint["chunks_written"] == 6
+
+        model2 = CountingModel()
+        meta = build_index(iter(chunks), out_dir=idx, model=model2, shard_size=3)
+        assert meta["count"] == 10
+        # Resumed run only ever encodes chunk 6 onward; chunks 0-5 stay
+        # embedded from the first attempt and are never handed to encode()
+        # a second time.
+        assert "chunk number 0" not in model2.encoded_texts
+        assert "chunk number 5" not in model2.encoded_texts
+        assert "chunk number 6" in model2.encoded_texts
+        assert "chunk number 9" in model2.encoded_texts
+
+        vectors, ids, _ = load_index(idx)
+        assert ids == [c.id for c in chunks]
+        assert vectors.shape[0] == 10
+
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as d:
+        run(Path(d))
+
+
+def test_payloads_jsonl_orphaned_tail_is_discarded_on_resume(tmp_path):
+    """payloads.jsonl is written per-chunk, vectors per-shard, so a crash can
+    leave payload lines with no backing vectors. Those must be dropped, not
+    trusted, or the resumed run's ids.json would list chunks that were never
+    actually embedded into any shard."""
+    idx = tmp_path / "idx"
+    chunks = _chunks(10)
+    model = FakeModel()
+    with pytest.raises(Boom):
+        build_index(_crashing_stream(chunks, crash_at=7), out_dir=idx,
+                    model=model, shard_size=3)
+
+    lines_after_crash = (idx / "payloads.jsonl").read_text().splitlines()
+    assert len(lines_after_crash) == 7  # chunks 0-6 written, only 0-5 flushed
+
+    build_index(iter(chunks), out_dir=idx, model=FakeModel(), shard_size=3)
+    ids = json.loads((idx / "ids.json").read_text())
+    assert ids == [c.id for c in chunks]
+    assert len(set(ids)) == 10  # no chunk duplicated across the two runs
+
+
+def test_a_completed_run_leaves_no_checkpoint_behind(tmp_path):
+    idx = tmp_path / "idx"
+    build_index(iter(_chunks(5)), out_dir=idx, model=FakeModel(), shard_size=3)
+    assert not (idx / ".checkpoint.json").exists()
+
+
+def test_fresh_run_with_no_checkpoint_ignores_stale_payloads(tmp_path):
+    """A directory with no checkpoint is treated as a fresh start even if it
+    happens to hold old files (a previous unrelated build, say): the writer
+    opens in 'w' mode, not 'a', exactly as before this feature existed."""
+    idx = tmp_path / "idx"
+    idx.mkdir()
+    (idx / "payloads.jsonl").write_text('{"id": "stale#0"}\n')
+
+    meta = build_index(iter(_chunks(3)), out_dir=idx, model=FakeModel())
+    assert meta["count"] == 3
+    ids = json.loads((idx / "ids.json").read_text())
+    assert ids == ["d#0", "d#1", "d#2"]
