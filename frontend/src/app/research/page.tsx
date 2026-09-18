@@ -108,7 +108,7 @@ export default function Home() {
 
       try {
         const res = await fetch(
-          `http://127.0.0.1:8000/agent_stream?query=${encodeURIComponent(q)}&k=6`,
+          `${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/agent_stream?query=${encodeURIComponent(q)}&k=6`,
           { signal: abortControllerRef.current.signal }
         );
 
