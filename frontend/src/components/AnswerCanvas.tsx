@@ -317,7 +317,7 @@ export function AnswerCanvas({ answer, query, sources, status, refused, isLoadin
       )}
 
       {/* Assistant Answer Bubble */}
-      {answer && !isEditing && (
+      {answer && !isEditing && !refused && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}

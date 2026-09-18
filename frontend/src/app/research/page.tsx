@@ -482,10 +482,7 @@ export default function Home() {
                     Not legal advice. Generated from a fixed corpus and can be wrong or incomplete; verify against the cited sources before relying on it.
                   </p>
                 )}
-              </div>
-            </div>
-
-            \n              {/* Search bar (persistent, compact) */}
+              </div>\n              {/* Search bar (persistent, compact) */}
               <div style={{ padding: "1rem 2rem 1.5rem", borderTop: "1px solid var(--color-graphite-border)", background: "var(--color-void)" }}>
                 <form onSubmit={handleSubmit} style={{ 
                   display: "flex", alignItems: "center", width: "100%", padding: "0.75rem 1rem", borderRadius: "0.625rem",
@@ -517,7 +514,10 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* RIGHT: Evidence Panel */}
+
+            </div>
+
+                          {/* RIGHT: Evidence Panel */}
             <motion.div
               initial={{ x: 60, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
