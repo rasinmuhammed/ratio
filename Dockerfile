@@ -53,4 +53,14 @@ EXPOSE 7860
 # Shell form (not exec-form JSON) deliberately: $PORT only expands through a
 # shell, and Cloud Run sets that env var at container start, after this
 # image was built, so it cannot be baked in as a literal at build time.
-CMD uv run uvicorn rag.api:app --host 0.0.0.0 --port ${PORT:-7860} --workers 1
+#
+# --no-sync: without it, `uv run` re-checks the project against
+# pyproject.toml on every container start, not just at build time, and that
+# re-check tries to build this project's own package, which needs
+# hatchling to read README.md, deliberately absent from this image (see the
+# --no-install-project comment above). That crashed every single container
+# start in production with "Readme file does not exist", the sync at build
+# time succeeded and was silently redone, and failed, at the one moment it
+# actually mattered. --no-sync trusts the environment uv sync already built
+# in the layer above and never touches it again.
+CMD uv run --no-sync uvicorn rag.api:app --host 0.0.0.0 --port ${PORT:-7860} --workers 1
