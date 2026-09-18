@@ -310,7 +310,7 @@ export function AnswerCanvas({ answer, query, sources, status, refused, isLoadin
           animate={{ opacity: 1, y: 0 }}
           className="flex justify-end mb-8"
         >
-          <div className="bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.06)] text-[var(--color-ivory)] px-5 py-3.5 rounded-2xl rounded-tr-sm max-w-[85%] text-[0.95rem] leading-relaxed shadow-sm backdrop-blur-md">
+          <div className="bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.06)] text-[var(--color-ivory)] px-4 py-2.5 rounded-2xl rounded-tr-sm max-w-[85%] text-[0.95rem] leading-relaxed shadow-sm backdrop-blur-md">
             {query}
           </div>
         </motion.div>

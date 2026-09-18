@@ -189,8 +189,6 @@ export default function RootLayout({
       </head>
       <body className="antialiased min-h-screen">
         {children}
-        <Analytics />
-        <SpeedInsights />
       </body>
     </html>
   );
