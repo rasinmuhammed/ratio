@@ -144,7 +144,7 @@ def main() -> None:
         summary = generate_summary(doc, llm)
         if summary:
             cursor.execute(
-                "INSERT INTO summary (doc_id, text) VALUES (?, ?)",
+                "INSERT OR IGNORE INTO summary (doc_id, text) VALUES (?, ?)",
                 (doc.id, summary)
             )
             conn.commit()
