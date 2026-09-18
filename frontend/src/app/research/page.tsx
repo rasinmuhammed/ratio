@@ -469,9 +469,9 @@ export default function Home() {
                   />
                 </form>
                 {/* Facet Filters */}
-                <div className="flex items-center gap-2 mt-3 px-1">
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.75rem", padding: "0 0.25rem" }}>
                   <button className="facet-chip active">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-gold)]"></span>
+                    <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "var(--color-gold)" }}></span>
                     All Law
                   </button>
                   <button className="facet-chip">Supreme Court</button>
