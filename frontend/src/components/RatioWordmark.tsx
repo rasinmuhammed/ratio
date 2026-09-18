@@ -16,7 +16,7 @@ export function RatioWordmark({ size = "md" }: Props) {
 
   return (
     <div className="flex items-center gap-2">
-      <img src="/ratio-logo.jpg" alt="Ratio Logo" style={{ height: size === 'xl' ? '64px' : size === 'md' ? '28px' : '20px', borderRadius: '20%' }} />
+      
       <span
         className={`wordmark ${s.text} text-[var(--color-ivory)]`}
         style={{ letterSpacing: size === "xl" ? "0.15em" : "0.1em" }}

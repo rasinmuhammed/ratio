@@ -101,6 +101,16 @@ export default function Home() {
       setRefused(false);
       setStatusText("Engaging Autonomous Agent...");
 
+      // Client-side quick guardrail for basic conversational/math queries to avoid heavy LLM latency
+      const lowerQ = q.toLowerCase();
+      const isMath = /^[0-9\+\-\*/\=\s\?]+$/.test(q) || /(what is|calculate|compute).*[0-9]/.test(lowerQ);
+      if (isMath) {
+        setRefused(true);
+        setAppState("complete");
+        setAnswer("INSUFFICIENT_CONTEXT");
+        return;
+      }
+
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
