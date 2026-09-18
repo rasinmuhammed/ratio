@@ -173,7 +173,10 @@ export default function Home() {
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") handleSubmit();
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleSubmit();
+    }
   };
 
   const isActive = appState !== "idle";
@@ -452,38 +455,6 @@ export default function Home() {
                 </button>
               </div>
 
-              {/* Search bar (persistent, compact) */}
-              <div style={{ padding: "1.25rem 2rem 0" }}>
-                <form onSubmit={handleSubmit} style={{ 
-                  display: "flex", alignItems: "center", width: "100%", padding: "0.75rem 1rem", borderRadius: "0.625rem",
-                  background: "rgba(7, 7, 10, 0.6)", border: "1px solid var(--color-graphite-border)",
-                  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)", transition: "border-color 0.2s ease"
-                }}
-                onFocus={(e) => e.currentTarget.style.borderColor = "rgba(229,193,88,0.4)"}
-                onBlur={(e) => e.currentTarget.style.borderColor = "var(--color-graphite-border)"}
-                >
-                  <SearchIcon style={{ color: "var(--color-ash)", flexShrink: 0, marginRight: "0.75rem" }} size={15} strokeWidth={1.5} />
-                  <input
-                    type="text"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder="Refine or ask a follow-up..."
-                    style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "var(--color-ivory)", fontSize: "0.875rem", fontFamily: "var(--font-sans)" }}
-                  />
-                </form>
-                {/* Facet Filters */}
-                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.75rem", padding: "0 0.25rem" }}>
-                  <button className="facet-chip active">
-                    <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "var(--color-gold)" }}></span>
-                    All Law
-                  </button>
-                  <button className="facet-chip">Supreme Court</button>
-                  <button className="facet-chip">Patna HC</button>
-                  <button className="facet-chip">Statutes</button>
-                </div>
-              </div>
-
               {/* Scrollable answer area */}
               <div className="hide-scrollbar" style={{ flex: 1, overflowY: "auto", padding: "1.75rem 2rem" }}>
                 <AnimatePresence>
@@ -514,7 +485,39 @@ export default function Home() {
               </div>
             </div>
 
-            {/* RIGHT: Evidence Panel */}
+            \n              {/* Search bar (persistent, compact) */}
+              <div style={{ padding: "1rem 2rem 1.5rem", borderTop: "1px solid var(--color-graphite-border)", background: "var(--color-void)" }}>
+                <form onSubmit={handleSubmit} style={{ 
+                  display: "flex", alignItems: "center", width: "100%", padding: "0.75rem 1rem", borderRadius: "0.625rem",
+                  background: "rgba(7, 7, 10, 0.6)", border: "1px solid var(--color-graphite-border)",
+                  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)", transition: "border-color 0.2s ease"
+                }}
+                onFocus={(e) => e.currentTarget.style.borderColor = "rgba(229,193,88,0.4)"}
+                onBlur={(e) => e.currentTarget.style.borderColor = "var(--color-graphite-border)"}
+                >
+                  <SearchIcon style={{ color: "var(--color-ash)", flexShrink: 0, marginRight: "0.75rem" }} size={15} strokeWidth={1.5} />
+                  <input
+                    type="text"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Refine or ask a follow-up..."
+                    style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "var(--color-ivory)", fontSize: "0.875rem", fontFamily: "var(--font-sans)" }}
+                  />
+                </form>
+                {/* Facet Filters */}
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.75rem", padding: "0 0.25rem" }}>
+                  <button className="facet-chip active">
+                    <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "var(--color-gold)" }}></span>
+                    All Law
+                  </button>
+                  <button className="facet-chip">Supreme Court</button>
+                  <button className="facet-chip">Patna HC</button>
+                  <button className="facet-chip">Statutes</button>
+                </div>
+              </div>
+
+              {/* RIGHT: Evidence Panel */}
             <motion.div
               initial={{ x: 60, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}

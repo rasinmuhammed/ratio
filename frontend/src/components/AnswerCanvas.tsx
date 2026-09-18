@@ -310,7 +310,7 @@ export function AnswerCanvas({ answer, query, sources, status, refused, isLoadin
           animate={{ opacity: 1, y: 0 }}
           className="flex justify-end mb-8"
         >
-          <div className="bg-[var(--color-graphite-deep)] border border-[var(--color-graphite-border)] text-[var(--color-ivory)] px-5 py-3.5 rounded-2xl max-w-[85%] text-[0.95rem] leading-relaxed shadow-sm">
+          <div className="bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.06)] text-[var(--color-ivory)] px-5 py-3.5 rounded-2xl rounded-tr-sm max-w-[85%] text-[0.95rem] leading-relaxed shadow-sm backdrop-blur-md">
             {query}
           </div>
         </motion.div>
@@ -342,12 +342,12 @@ export function AnswerCanvas({ answer, query, sources, status, refused, isLoadin
           {/* HITL Edit Button */}
           {!isLoading && !refused && (
             <div className="mt-8 pt-4 border-t border-[var(--color-graphite-border)] flex items-center justify-between">
-              <span className="text-xs text-[var(--color-ash)] opacity-70">See a hallucination or poor citation?</span>
+              <span className="text-[0.75rem] text-[var(--color-ash)] opacity-60 font-medium">See a hallucination or poor citation?</span>
               <motion.button
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={() => setIsEditing(true)}
-                className="flex items-center gap-2 text-[var(--color-ivory)] bg-[var(--color-obsidian)] border border-[var(--color-graphite-border)] px-4 py-2 rounded-md text-sm font-medium hover:bg-white/5 transition-colors"
+                className="flex items-center gap-2 text-[var(--color-void)] bg-[var(--color-parchment)] border border-[rgba(255,255,255,0.1)] px-4 py-1.5 rounded-full text-[0.8rem] font-semibold tracking-wide shadow-sm hover:bg-white transition-all"
               >
                 <Edit3 size={14} /> Correct Answer
               </motion.button>
