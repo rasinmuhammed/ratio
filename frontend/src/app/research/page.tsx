@@ -159,7 +159,11 @@ export default function Home() {
             }
           }
         }
-      } catch (err) {
+      } catch (err: any) {
+        if (err.name === 'AbortError') {
+          console.log('Fetch aborted intentionally');
+          return;
+        }
         console.error(err);
         setStatusText("Connection error — ensure the Ratio engine is running.");
         setAppState("idle");
@@ -429,8 +433,8 @@ export default function Home() {
                 <RatioWordmark size="sm" />
                 <div style={{ height: "20px", width: "1px", background: "var(--color-graphite-border)" }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <p style={{ color: "var(--color-fog)", fontSize: "0.75rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontFamily: "var(--font-mono)", letterSpacing: "0.05em" }}>
-                    {submittedQuery}
+                  <p style={{ color: "var(--color-ash)", fontSize: "0.7rem", textTransform: "uppercase", fontFamily: "var(--font-mono)", letterSpacing: "0.15em" }}>
+                    Research Session
                   </p>
                 </div>
                 <button

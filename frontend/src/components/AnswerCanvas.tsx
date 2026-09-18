@@ -303,15 +303,32 @@ export function AnswerCanvas({ answer, query, sources, status, refused, isLoadin
         </motion.div>
       )}
 
-      {/* Streaming Answer */}
+      {/* User Query Bubble */}
+      {query && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex justify-end mb-8"
+        >
+          <div className="bg-[var(--color-graphite-deep)] border border-[var(--color-graphite-border)] text-[var(--color-ivory)] px-5 py-3.5 rounded-2xl max-w-[85%] text-[0.95rem] leading-relaxed shadow-sm">
+            {query}
+          </div>
+        </motion.div>
+      )}
+
+      {/* Assistant Answer Bubble */}
       {answer && !isEditing && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ type: "spring", stiffness: 400, damping: 30 }}
-          className="answer-prose text-[var(--color-parchment)] text-[0.975rem] leading-[1.9]"
+          className="flex gap-4"
         >
-          <div>{renderAnswerWithThinking(answer, sources)}</div>
+          <div className="w-8 h-8 rounded-full bg-[rgba(229,193,88,0.15)] border border-[var(--color-gold)]/30 flex items-center justify-center shrink-0 mt-1 shadow-[0_0_12px_rgba(229,193,88,0.1)]">
+            <span className="text-[var(--color-gold)] font-bold font-serif text-sm">R</span>
+          </div>
+          <div className="answer-prose text-[var(--color-parchment)] text-[0.975rem] leading-[1.9] flex-1">
+            <div>{renderAnswerWithThinking(answer, sources)}</div>
 
           {/* Cursor blink while still loading */}
           {isLoading && (
@@ -345,6 +362,7 @@ export function AnswerCanvas({ answer, query, sources, status, refused, isLoadin
                <CheckCircle2 size={16} /> Saved to DPO Training Dataset
              </motion.div>
           )}
+          </div>
         </motion.div>
       )}
 
