@@ -105,9 +105,18 @@ export default function Home() {
       const lowerQ = q.toLowerCase();
       const isMath = /^[0-9\+\-\*/\=\s\?]+$/.test(q) || /(what is|calculate|compute).*[0-9]/.test(lowerQ);
       if (isMath) {
-        setRefused(true);
-        setAppState("complete");
-        setAnswer("INSUFFICIENT_CONTEXT");
+        // Stream a fast simulated AI response instead of a hard error
+        const fallback = "I am an autonomous legal research agent. I am designed to analyze Indian court judgments and legal precedents, not to perform mathematical calculations or general chat.\n\nPlease ask me a legal question, such as \"Does promissory estoppel apply against the State?\"";
+        
+        let i = 0;
+        const interval = setInterval(() => {
+          setAnswer(prev => prev + fallback[i]);
+          i++;
+          if (i === fallback.length) {
+            clearInterval(interval);
+            setAppState("complete");
+          }
+        }, 15);
         return;
       }
 
